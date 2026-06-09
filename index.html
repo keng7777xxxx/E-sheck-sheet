@@ -3,15 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Writer Mobile</title>
-    <!-- เรียกใช้ไลบรารีสําหรับจัดการ PDF บนเว็บ -->
+    <title>Multi PDF Loader & Writer</title>
     <script src="https://cloudflare.com"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; background: #f0f0f0; touch-action: none; }
-        .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-        button, input[type="file"] { padding: 10px; font-size: 14px; background: #fff; border: 1px solid #ccc; border-radius: 5px; }
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; align-items: center; }
+        select, button { padding: 10px; font-size: 14px; border-radius: 5px; border: 1px solid #ccc; }
+        select { background: white; min-width: 150px; }
         button { background: #007bff; color: white; border: none; cursor: pointer; }
         button:active { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #status { font-size: 14px; color: #555; font-weight: bold; }
         #canvas-container { position: relative; border: 2px solid #333; background: white; max-width: 100%; display: inline-block; }
         canvas { display: block; touch-action: none; }
     </style>
@@ -19,11 +21,17 @@
 <body>
 
     <div class="controls">
-        <!-- ปุ่มดึงไฟล์ PDF จากในมือถือ -->
-        <input type="file" id="pdf-input" accept="application/pdf">
-        <!-- ปุ่มบันทึกไฟล์หลังจากเขียนเสร็จ -->
+        <!-- เมนูสำหรับเลือกไฟล์ PDF บนเซิร์ฟเวอร์ -->
+        <select id="pdf-selector">
+            <option value="">-- เลือกไฟล์ PDF --</option>
+            <option value="form_a.pdf">แบบฟอร์ม A (ใบเช็คระยะ)</option>
+            <option value="form_b.pdf">แบบฟอร์ม B (ใบส่งงาน)</option>
+            <option value="form_c.pdf">แบบฟอร์ม C (รายงานอุบัติเหตุ)</option>
+        </select>
+        
         <button id="save-btn" disabled>Save As PDF</button>
         <button id="clear-btn" style="background:#dc3545;">ล้างหน้าจอ</button>
+        <span id="status">กรุณาเลือกไฟล์ PDF ที่ต้องการ</span>
     </div>
 
     <div id="canvas-container">
@@ -31,7 +39,8 @@
     </div>
 
     <script>
-        const pdfInput = document.getElementById('pdf-input');
+        const pdfSelector = document.getElementById('pdf-selector');
+        const statusText = document.getElementById('status');
         const saveBtn = document.getElementById('save-btn');
         const clearBtn = document.getElementById('clear-btn');
         const canvas = document.getElementById('pdf-canvas');
@@ -39,60 +48,68 @@
         
         let pdfBytes = null;
         let isDrawing = false;
-        let drawingActions = []; // เก็บพิกัดเส้นที่เขียนด้วยปากกา
+        let drawingActions = [];
+        let currentFileName = "document.pdf";
 
-        // 1. ดึงไฟล์ PDF เข้ามาแสดงผลใน Canvas ของมือถือ
-        pdfInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+        // ฟังก์ชันดึงไฟล์ตามที่เลือกในเมนู Dropdown
+        pdfSelector.addEventListener('change', async (e) => {
+            const selectedFile = e.target.value;
+            if (!selectedFile) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                saveBtn.disabled = true;
+                statusText.innerText = "กรุณาเลือกไฟล์ PDF ที่ต้องการ";
+                return;
+            }
 
-            pdfBytes = await file.arrayBuffer();
-            
-            // ใช้ pdf-lib เพื่อเปิดดูขนาดหน้าแรกและแปลงมาวาดบนหน้าจอ
-            const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
-            const pages = pdfDoc.getPages();
-            const firstPage = pages[0];
-            const { width, height } = firstPage.getSize();
+            statusText.innerText = "กำลังโหลดไฟล์...";
+            currentFileName = selectedFile;
 
-            // ปรับขนาดหน้าจอให้พอดีกับมือถือ (ลดขนาดอัตราส่วนให้เหมาะสม)
-            const scale = Math.min((window.innerWidth - 30) / width, 1);
-            canvas.width = width * scale;
-            canvas.height = height * scale;
-            canvas.dataset.scale = scale;
+            try {
+                const response = await fetch(selectedFile);
+                if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์');
+                
+                pdfBytes = await response.arrayBuffer();
+                
+                const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
+                const pages = pdfDoc.getPages();
+                const firstPage = pages[0];
+                const { width, height } = firstPage.getSize();
 
-            // วาดพื้นหลังขาวจำลองหน้ากระดาษ PDF
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            ctx.fillStyle = '#555555';
-            ctx.font = '16px sans-serif';
-            ctx.fillText("โหลดไฟล์สำเร็จ! ใช้ปากกาเขียนลงบนพื้นที่นี้ได้ทันที", 20, 40);
+                const scale = Math.min((window.innerWidth - 30) / width, 1);
+                canvas.width = width * scale;
+                canvas.height = height * scale;
+                canvas.dataset.scale = scale;
 
-            saveBtn.disabled = false;
-            drawingActions = [];
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                statusText.innerText = "โหลดสำเร็จ! เริ่มเขียนได้เลย";
+                saveBtn.disabled = false;
+                drawingActions = [];
+            } catch (error) {
+                statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
+                saveBtn.disabled = true;
+            }
         });
 
-        // 2. ตรวจจับการเขียนด้วยปากกา/นิ้ว (Touch Events สำหรับมือถือ)
+        // ระบบตรวจจับการวาดเขียน (Touch Events)
         function getTouchPos(e) {
             const rect = canvas.getBoundingClientRect();
             const touch = e.touches[0];
-            return {
-                x: touch.clientX - rect.left,
-                y: touch.clientY - rect.top
-            };
+            return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
         }
 
         canvas.addEventListener('touchstart', (e) => {
+            if (!pdfBytes) return;
             e.preventDefault();
             isDrawing = true;
             const pos = getTouchPos(e);
             ctx.beginPath();
             ctx.moveTo(pos.x, pos.y);
-            ctx.lineWidth = 3; // ขนาดเส้นปากกา
-            ctx.strokeStyle = '#000000'; // สีปากกา (ดำ)
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#000000';
             ctx.lineCap = 'round';
             
-            // เก็บพิกัดเริ่มต้นไปแปลงลง PDF
             const scale = parseFloat(canvas.dataset.scale);
             drawingActions.push({ type: 'start', x: pos.x / scale, y: pos.y / scale });
         });
@@ -110,29 +127,28 @@
 
         canvas.addEventListener('touchend', () => { isDrawing = false; });
 
-        // ปุ่มล้างหน้าจอที่เขียน
         clearBtn.addEventListener('click', () => {
             if(!pdfBytes) return;
             ctx.fillStyle = '#ffffff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             drawingActions = [];
+            statusText.innerText = "ล้างหน้าจอแล้ว เริ่มเขียนใหม่ได้";
         });
 
-        // 3. รวมเส้นที่เขียนเข้ากับไฟล์ PDF ต้นฉบับแล้วสั่ง Save As เป็นไฟล์ใหม่
+        // ปุ่มบันทึกไฟล์ (Save As)
         saveBtn.addEventListener('click', async () => {
             if (!pdfBytes) return;
 
+            statusText.innerText = "กำลังประมวลผลไฟล์...";
             const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
             const pages = pdfDoc.getPages();
             const firstPage = pages[0];
             const { height } = firstPage.getSize();
 
-            // นำเส้นที่วาดบนหน้าจอมือถือไปวาดลงในไฟล์ PDF จริงตามพิกัด
             let lastX = 0;
             let lastY = 0;
 
             drawingActions.forEach(action => {
-                // พิกัด PDF จะนับจากมุมซ้ายล่าง ย้อนขึ้นไปด้านบน (ต้องสลับแกน Y)
                 const pdfY = height - action.y; 
 
                 if (action.type === 'start') {
@@ -150,15 +166,15 @@
                 }
             });
 
-            // ทำการ Save As ดาวน์โหลดลงมือถือ
             const modifiedPdfBytes = await pdfDoc.save();
             const blob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             
-            // ตั้งชื่อไฟล์ใหม่ตอนบันทึกออกไป
-            link.download = "signed_document.pdf";
+            // ตั้งชื่อไฟล์ปลายทางโดยเติมคำว่า signed_ นำหน้าชื่อไฟล์เดิม
+            link.download = "signed_" + currentFileName;
             link.click();
+            statusText.innerText = "บันทึกไฟล์สำเร็จ!";
         });
     </script>
 </body>
