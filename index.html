@@ -3,13 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Multi PDF Loader & Writer</title>
+    <title>PDF Search & Writer</title>
     <script src="https://cloudflare.com"></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 10px; background: #f0f0f0; touch-action: none; }
         .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; align-items: center; }
-        select, button { padding: 10px; font-size: 14px; border-radius: 5px; border: 1px solid #ccc; }
-        select { background: white; min-width: 150px; }
+        input[type="text"], button { padding: 10px; font-size: 14px; border-radius: 5px; border: 1px solid #ccc; }
+        
+        /* สไตล์ของกล่องค้นหาและรายการผลลัพธ์ */
+        .search-container { position: relative; display: inline-block; }
+        .search-results { 
+            position: absolute; top: 100%; left: 0; right: 0; 
+            background: white; border: 1px solid #ccc; border-radius: 5px; 
+            max-height: 200px; overflow-y: auto; z-index: 1000; display: none; 
+            box-shadow: 0px 4px 6px rgba(0,0,0,0.1);
+        }
+        .search-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 14px; }
+        .search-item:hover { background: #f0f0f0; }
+
         button { background: #007bff; color: white; border: none; cursor: pointer; }
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; cursor: not-allowed; }
@@ -21,17 +32,15 @@
 <body>
 
     <div class="controls">
-        <!-- เมนูสำหรับเลือกไฟล์ PDF บนเซิร์ฟเวอร์ -->
-        <select id="pdf-selector">
-            <option value="">-- เลือกไฟล์ PDF --</option>
-            <option value="form_a.pdf">แบบฟอร์ม A (ใบเช็คระยะ)</option>
-            <option value="form_b.pdf">แบบฟอร์ม B (ใบส่งงาน)</option>
-            <option value="form_c.pdf">แบบฟอร์ม C (รายงานอุบัติเหตุ)</option>
-        </select>
+        <!-- ช่องสำหรับพิมพ์ค้นหาชื่อไฟล์ -->
+        <div class="search-container">
+            <input type="text" id="search-input" placeholder="🔍 พิมพ์ค้นหาชื่อไฟล์ PDF..." autocomplete="off">
+            <div id="search-results" class="search-results"></div>
+        </div>
         
         <button id="save-btn" disabled>Save As PDF</button>
         <button id="clear-btn" style="background:#dc3545;">ล้างหน้าจอ</button>
-        <span id="status">กรุณาเลือกไฟล์ PDF ที่ต้องการ</span>
+        <span id="status">กรุณาพิมพ์ค้นหาไฟล์ PDF ที่ต้องการ</span>
     </div>
 
     <div id="canvas-container">
@@ -39,7 +48,17 @@
     </div>
 
     <script>
-        const pdfSelector = document.getElementById('pdf-selector');
+        // === 1. รายชื่อไฟล์ PDF ทั้งหมดบนเซิร์ฟเวอร์ (เมื่อมีไฟล์เพิ่มในอนาคต ให้มาพิมพ์เพิ่มที่นี่) ===
+        const pdfFiles = [
+            { name: "form_a.pdf", label: "แบบฟอร์ม A (ใบเช็คระยะเครื่องจักร)" },
+            { name: "form_b.pdf", label: "แบบฟอร์ม B (ใบส่งมอบงานประจำวัน)" },
+            { name: "form_c.pdf", label: "แบบฟอร์ม C (รายงานอุบัติเหตุในคลังสินค้า)" },
+            { name: "checklist_safety.pdf", label: "ใบเช็คลิสต์ความปลอดภัยโรงงาน" },
+            { name: "report_monthly.pdf", label: "แบบฟอร์มรายงานสรุปประจำเดือน" }
+        ];
+
+        const searchInput = document.getElementById('search-input');
+        const searchResults = document.getElementById('search-results');
         const statusText = document.getElementById('status');
         const saveBtn = document.getElementById('save-btn');
         const clearBtn = document.getElementById('clear-btn');
@@ -51,25 +70,63 @@
         let drawingActions = [];
         let currentFileName = "document.pdf";
 
-        // ฟังก์ชันดึงไฟล์ตามที่เลือกในเมนู Dropdown
-        pdfSelector.addEventListener('change', async (e) => {
-            const selectedFile = e.target.value;
-            if (!selectedFile) {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                saveBtn.disabled = true;
-                statusText.innerText = "กรุณาเลือกไฟล์ PDF ที่ต้องการ";
+        // === 2. ระบบกรองชื่อไฟล์อัจฉริยะตามคำที่พิมพ์ ===
+        searchInput.addEventListener('input', (e) => {
+            const keyword = e.target.value.toLowerCase();
+            searchResults.innerHTML = '';
+            
+            if (!keyword) {
+                searchResults.style.display = 'none';
                 return;
             }
 
-            statusText.innerText = "กำลังโหลดไฟล์...";
-            currentFileName = selectedFile;
+            // ค้นหาได้ทั้งจากชื่อไฟล์จริง และชื่อภาษาไทยที่แสดง
+            const matchedFiles = pdfFiles.filter(file => 
+                file.name.toLowerCase().includes(keyword) || 
+                file.label.toLowerCase().includes(keyword)
+            );
+
+            if (matchedFiles.length > 0) {
+                matchedFiles.forEach(file => {
+                    const div = document.createElement('div');
+                    div.className = 'search-item';
+                    div.innerText = file.label;
+                    // เมื่อกดเลือกไฟล์จากรายการค้นหา
+                    div.addEventListener('click', () => {
+                        searchInput.value = file.label;
+                        searchResults.style.display = 'none';
+                        loadPdfFile(file.name);
+                    });
+                    searchResults.appendChild(div);
+                });
+                searchResults.style.display = 'block';
+            } else {
+                const div = document.createElement('div');
+                div.className = 'search-item';
+                div.style.color = '#999';
+                div.innerText = '❌ ไม่พบไฟล์ที่ตรงกัน';
+                searchResults.appendChild(div);
+                searchResults.style.display = 'block';
+            }
+        });
+
+        // ปิดกล่องค้นหาเมื่อคลิกพื้นที่อื่น
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.search-container')) {
+                searchResults.style.display = 'none';
+            }
+        });
+
+        // === 3. ฟังก์ชันดึงไฟล์ PDF มาแสดงผล ===
+        async function loadPdfFile(fileName) {
+            statusText.innerText = "กำลังดึงไฟล์จากเซิร์ฟเวอร์...";
+            currentFileName = fileName;
 
             try {
-                const response = await fetch(selectedFile);
-                if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์');
+                const response = await fetch(fileName);
+                if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์ กรุณาตรวจสอบการอัปโหลด');
                 
                 pdfBytes = await response.arrayBuffer();
-                
                 const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
                 const pages = pdfDoc.getPages();
                 const firstPage = pages[0];
@@ -83,16 +140,16 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 
-                statusText.innerText = "โหลดสำเร็จ! เริ่มเขียนได้เลย";
+                statusText.innerText = "โหลดสำเร็จ! ใช้ปากกาเขียนได้เลย";
                 saveBtn.disabled = false;
                 drawingActions = [];
             } catch (error) {
                 statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
                 saveBtn.disabled = true;
             }
-        });
+        }
 
-        // ระบบตรวจจับการวาดเขียน (Touch Events)
+        // === 4. ระบบตรวจจับการเขียนหน้าจอ (Touch Events) ===
         function getTouchPos(e) {
             const rect = canvas.getBoundingClientRect();
             const touch = e.touches[0];
@@ -135,7 +192,7 @@
             statusText.innerText = "ล้างหน้าจอแล้ว เริ่มเขียนใหม่ได้";
         });
 
-        // ปุ่มบันทึกไฟล์ (Save As)
+        // === 5. ระบบประมวลผลเซฟไฟล์ใหม่ (Save As) ===
         saveBtn.addEventListener('click', async () => {
             if (!pdfBytes) return;
 
@@ -171,7 +228,6 @@
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             
-            // ตั้งชื่อไฟล์ปลายทางโดยเติมคำว่า signed_ นำหน้าชื่อไฟล์เดิม
             link.download = "signed_" + currentFileName;
             link.click();
             statusText.innerText = "บันทึกไฟล์สำเร็จ!";
