@@ -4,13 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>PDF Search & Writer</title>
-    <script src="https://cloudflare.com"></script>
+    
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+
     <style>
-        body { font-family: sans-serif; margin: 0; padding: 10px; background: #f0f0f0; touch-action: none; }
+        body { font-family: sans-serif; margin: 0; padding: 10px; background: #f0f0f0; }
         .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; align-items: center; }
         input[type="text"], button { padding: 10px; font-size: 14px; border-radius: 5px; border: 1px solid #ccc; }
         
-        /* สไตล์ของกล่องค้นหาและรายการผลลัพธ์ */
         .search-container { position: relative; display: inline-block; }
         .search-results { 
             position: absolute; top: 100%; left: 0; right: 0; 
@@ -26,13 +27,12 @@
         button:disabled { background: #ccc; cursor: not-allowed; }
         #status { font-size: 14px; color: #555; font-weight: bold; }
         #canvas-container { position: relative; border: 2px solid #333; background: white; max-width: 100%; display: inline-block; }
-        canvas { display: block; touch-action: none; }
+        canvas { display: block; cursor: crosshair; }
     </style>
 </head>
 <body>
 
     <div class="controls">
-        <!-- ช่องสำหรับพิมพ์ค้นหาชื่อไฟล์ -->
         <div class="search-container">
             <input type="text" id="search-input" placeholder="🔍 พิมพ์ค้นหาชื่อไฟล์ PDF..." autocomplete="off">
             <div id="search-results" class="search-results"></div>
@@ -48,13 +48,10 @@
     </div>
 
     <script>
-        // === 1. รายชื่อไฟล์ PDF ทั้งหมดบนเซิร์ฟเวอร์ (เมื่อมีไฟล์เพิ่มในอนาคต ให้มาพิมพ์เพิ่มที่นี่) ===
-        // === 1. รายชื่อไฟล์ PDF ทั้งหมดบนเซิร์ฟเวอร์ (แก้ไขให้ตรงกับไฟล์ของคุณแล้ว) ===
         const pdfFiles = [
-            { name: "62511 2LS0H.pdf", label: "62511 2LS0H (62511 2LS0H)" },
-            { name: "65140 2LS0A.pdf", label: "65140 2LS0A (5140 2LS0A)" }
+            { name: "62511 2LS0H.pdf", label: "62511 2LS0H (Part check sheet)" },
+            { name: "65140 2LS0A.pdf", label: "65140 2LS0A (Part check sheet)" }
         ];
-
 
         const searchInput = document.getElementById('search-input');
         const searchResults = document.getElementById('search-results');
@@ -69,7 +66,7 @@
         let drawingActions = [];
         let currentFileName = "document.pdf";
 
-        // === 2. ระบบกรองชื่อไฟล์อัจฉริยะตามคำที่พิมพ์ ===
+        // === 2. ระบบกรองชื่อไฟล์ ===
         searchInput.addEventListener('input', (e) => {
             const keyword = e.target.value.toLowerCase();
             searchResults.innerHTML = '';
@@ -79,7 +76,6 @@
                 return;
             }
 
-            // ค้นหาได้ทั้งจากชื่อไฟล์จริง และชื่อภาษาไทยที่แสดง
             const matchedFiles = pdfFiles.filter(file => 
                 file.name.toLowerCase().includes(keyword) || 
                 file.label.toLowerCase().includes(keyword)
@@ -90,7 +86,6 @@
                     const div = document.createElement('div');
                     div.className = 'search-item';
                     div.innerText = file.label;
-                    // เมื่อกดเลือกไฟล์จากรายการค้นหา
                     div.addEventListener('click', () => {
                         searchInput.value = file.label;
                         searchResults.style.display = 'none';
@@ -109,7 +104,6 @@
             }
         });
 
-        // ปิดกล่องค้นหาเมื่อคลิกพื้นที่อื่น
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.search-container')) {
                 searchResults.style.display = 'none';
@@ -123,7 +117,7 @@
 
             try {
                 const response = await fetch(fileName);
-                if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์ กรุณาตรวจสอบการอัปโหลด');
+                if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์ กรุณาตรวจสอบการอัปโหลดไฟล์ PDF ไว้ที่โฟลเดอร์เดียวกันหรือยัง');
                 
                 pdfBytes = await response.arrayBuffer();
                 const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
@@ -139,7 +133,7 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 
-                statusText.innerText = "โหลดสำเร็จ! ใช้ปากกาเขียนได้เลย";
+                statusText.innerText = "โหลดสำเร็จ! เริ่มเขียนบนหน้าจอได้เลย";
                 saveBtn.disabled = false;
                 drawingActions = [];
             } catch (error) {
@@ -148,18 +142,20 @@
             }
         }
 
-        // === 4. ระบบตรวจจับการเขียนหน้าจอ (Touch Events) ===
-        function getTouchPos(e) {
+        // === 4. ฟังก์ชันคำนวณตำแหน่งพิกัดการวาด ===
+        function getPos(e) {
             const rect = canvas.getBoundingClientRect();
-            const touch = e.touches[0];
-            return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+            // รองรับทั้งแบบสัมผัส (Touch) และแบบเมาส์ (Mouse)
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return { x: clientX - rect.left, y: clientY - rect.top };
         }
 
-        canvas.addEventListener('touchstart', (e) => {
+        function startDrawing(e) {
             if (!pdfBytes) return;
-            e.preventDefault();
+            if (e.type === 'touchstart') e.preventDefault();
             isDrawing = true;
-            const pos = getTouchPos(e);
+            const pos = getPos(e);
             ctx.beginPath();
             ctx.moveTo(pos.x, pos.y);
             ctx.lineWidth = 3;
@@ -168,20 +164,31 @@
             
             const scale = parseFloat(canvas.dataset.scale);
             drawingActions.push({ type: 'start', x: pos.x / scale, y: pos.y / scale });
-        });
+        }
 
-        canvas.addEventListener('touchmove', (e) => {
+        function draw(e) {
             if (!isDrawing) return;
-            e.preventDefault();
-            const pos = getTouchPos(e);
+            if (e.type === 'touchmove') e.preventDefault();
+            const pos = getPos(e);
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
 
             const scale = parseFloat(canvas.dataset.scale);
             drawingActions.push({ type: 'move', x: pos.x / scale, y: pos.y / scale });
-        });
+        }
 
-        canvas.addEventListener('touchend', () => { isDrawing = false; });
+        function stopDrawing() { isDrawing = false; }
+
+        // รองรับระบบสัมผัส (มือถือ/แท็บเล็ต)
+        canvas.addEventListener('touchstart', startDrawing);
+        canvas.addEventListener('touchmove', draw);
+        canvas.addEventListener('touchend', stopDrawing);
+
+        // รองรับระบบเมาส์ (คอมพิวเตอร์ PC/Notebook)
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseleave', stopDrawing);
 
         clearBtn.addEventListener('click', () => {
             if(!pdfBytes) return;
@@ -191,7 +198,7 @@
             statusText.innerText = "ล้างหน้าจอแล้ว เริ่มเขียนใหม่ได้";
         });
 
-        // === 5. ระบบประมวลผลเซฟไฟล์ใหม่ (Save As) ===
+        // === 5. ระบบเซฟไฟล์ใหม่ (Save As) ===
         saveBtn.addEventListener('click', async () => {
             if (!pdfBytes) return;
 
