@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Search & Writer (Multi-Page with Zoom, Undo & Fixed 2px Line)</title>
+    <title>PDF Search & Writer (Multi-Page, Zoom, Undo, Scroll Enabled)</title>
     
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -32,7 +32,17 @@
         
         #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
         
-        #scroll-wrapper { width: 100%; overflow: auto; border: 2px solid #333; background: #525659; border-radius: 5px; margin-top: 10px; }
+        /* แก้ไขสไตล์ตรงนี้: เปิดตัว Scrollbar และยกเลิกการบล็อก Touch ทั่วทั้งกล่อง */
+        #scroll-wrapper { 
+            width: 100%; 
+            max-height: 70vh; /* จำกัดความสูงของพื้นที่ดูเอกสารให้พอดีกับจอ */
+            overflow: auto; /* เปิดให้มีแถบเลื่อน ซ้าย ขวา บน ล่าง */
+            border: 2px solid #333; 
+            background: #525659; 
+            border-radius: 5px; 
+            margin-top: 10px;
+            -webkit-overflow-scrolling: touch; /* ช่วยให้ปัดเลื่อนบน iOS/iPadOS ได้ลื่นไหล */
+        }
         #canvas-container { position: relative; background: white; margin: 10px auto; display: block; }
         canvas { display: block; cursor: crosshair; }
     </style>
@@ -111,8 +121,8 @@
         
         let drawingActionsByPage = {}; 
 
-        // ล็อกค่าความหนาของเส้นไว้ที่ 2px เป็นมาตรฐานสากลของโปรแกรมนี้
-        const fixedThickness = 1;
+        // ล็อกค่าความหนาของเส้นไว้ที่ 0.5px ตามที่คุณแจ้งล่าสุด
+        const fixedThickness = 0.5;
 
         // === 1. ระบบค้นหาไฟล์ ===
         searchInput.addEventListener('input', (e) => {
@@ -225,7 +235,7 @@
 
             ctx.strokeStyle = '#000000';
             ctx.lineCap = 'round';
-            ctx.lineWidth = fixedThickness; // สั่งเรนเดอร์เส้นเก่ากลับมาด้วยขนาด 2px
+            ctx.lineWidth = fixedThickness;
 
             actions.forEach(action => {
                 const screenX = action.x * finalScale;
@@ -287,9 +297,10 @@
             renderPage(currentPageNum);
         });
 
-        // === 5. ระบบตรวจจับปากกา ===
+        // === 5. ระบบตรวจจับปากกา (ปรับแต่งไม่ให้ขัดขวางระบบเลื่อนหน้าจอ) ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
+            // เช็คว่าเป็นการแตะจอ (Touch) หรือไม่
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             return { x: clientX - rect.left, y: clientY - rect.top };
@@ -297,13 +308,22 @@
 
         function startDrawing(e) {
             if (!pdfBytes) return;
+            
+            // แก้ไขจุดนี้: ถ้าผู้ใช้แตะหน้าจอพร้อมกัน 2 นิ้วขึ้นไป (ตั้งใจจะเลื่อนดูส่วนอื่น/ถ่างซูม) ให้ยกเลิกการวาดเส้น และเปิดให้จอสไลด์ได้เลย
+            if (e.touches && e.touches.length > 1) {
+                isDrawing = false;
+                return; 
+            }
+            
+            // ถ้าใช้เมาส์ หรือ 1 นิ้วเขียนทั่วไป ให้บล็อกจอเลื่อนชั่วคราวเพื่อเขียนหนังสือ
             if (e.type === 'touchstart') e.preventDefault();
+            
             isDrawing = true;
             const pos = getPos(e);
             
             ctx.beginPath();
             ctx.moveTo(pos.x, pos.y);
-            ctx.lineWidth = fixedThickness; // ล็อกปากกาหน้าจอสัมผัสให้เป็น 2px
+            ctx.lineWidth = fixedThickness; 
             ctx.strokeStyle = '#000000';
             ctx.lineCap = 'round';
             
@@ -319,6 +339,13 @@
 
         function draw(e) {
             if (!isDrawing) return;
+            
+            // ป้องกันการลากเส้นหากตรวจพบว่านิ้วที่สองโผล่มากลางคันระหว่างวาด
+            if (e.touches && e.touches.length > 1) {
+                isDrawing = false;
+                return;
+            }
+            
             if (e.type === 'touchmove') e.preventDefault();
             const pos = getPos(e);
             ctx.lineTo(pos.x, pos.y);
@@ -383,7 +410,7 @@
                         targetPage.drawLine({
                             start: { x: lastX, y: lastY },
                             end: { x: action.x, y: pdfY },
-                            thickness: fixedThickness, // ล็อกความหนาของลายเส้นในไฟล์ PDF เป็น 2 หน่วยถาวร
+                            thickness: fixedThickness, 
                             color: PDFLib.rgb(0, 0, 0),
                         });
                         lastX = action.x; lastY = pdfY;
