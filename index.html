@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Search & Writer (Multi-Page, Zoom, Undo, Scroll Enabled)</title>
+    <title>PDF Search & Writer (Multi-Page, Zoom, Undo, Scroll Fixed)</title>
     
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -32,16 +32,16 @@
         
         #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
         
-        /* แก้ไขสไตล์ตรงนี้: เปิดตัว Scrollbar และยกเลิกการบล็อก Touch ทั่วทั้งกล่อง */
+        /* ปรับสไตล์ตรงนี้: ช่วยให้สไลด์บนแท็บเล็ตและมือถือลื่นไหลไม่ติดขัด */
         #scroll-wrapper { 
             width: 100%; 
-            max-height: 70vh; /* จำกัดความสูงของพื้นที่ดูเอกสารให้พอดีกับจอ */
-            overflow: auto; /* เปิดให้มีแถบเลื่อน ซ้าย ขวา บน ล่าง */
+            max-height: 65vh; 
+            overflow: auto; 
             border: 2px solid #333; 
             background: #525659; 
             border-radius: 5px; 
             margin-top: 10px;
-            -webkit-overflow-scrolling: touch; /* ช่วยให้ปัดเลื่อนบน iOS/iPadOS ได้ลื่นไหล */
+            -webkit-overflow-scrolling: touch; /* เปิดระบบหน่วงลื่นไหลของ iOS/iPadOS */
         }
         #canvas-container { position: relative; background: white; margin: 10px auto; display: block; }
         canvas { display: block; cursor: crosshair; }
@@ -121,7 +121,7 @@
         
         let drawingActionsByPage = {}; 
 
-        // ล็อกค่าความหนาของเส้นไว้ที่ 0.5px ตามที่คุณแจ้งล่าสุด
+        // ล็อกค่าความหนาของเส้นไว้ที่ 0.5px
         const fixedThickness = 0.5;
 
         // === 1. ระบบค้นหาไฟล์ ===
@@ -283,7 +283,7 @@
             if (currentPageNum < totalPagesCount) { currentPageNum++; renderPage(currentPageNum); }
         });
 
-        // === ระบบปุ่ม Undo (ย้อนกลับ) ===
+        // === ระบบปุ่ม Undo ===
         undoBtn.addEventListener('click', () => {
             let actions = drawingActionsByPage[currentPageNum] || [];
             if (actions.length === 0) return;
@@ -297,10 +297,9 @@
             renderPage(currentPageNum);
         });
 
-        // === 5. ระบบตรวจจับปากกา (ปรับแต่งไม่ให้ขัดขวางระบบเลื่อนหน้าจอ) ===
+        // === 5. ระบบตรวจจับปากกา (แก้ไขเพื่อปลดล็อคระบบเลื่อนหน้าจอ) ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
-            // เช็คว่าเป็นการแตะจอ (Touch) หรือไม่
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
             return { x: clientX - rect.left, y: clientY - rect.top };
@@ -309,13 +308,13 @@
         function startDrawing(e) {
             if (!pdfBytes) return;
             
-            // แก้ไขจุดนี้: ถ้าผู้ใช้แตะหน้าจอพร้อมกัน 2 นิ้วขึ้นไป (ตั้งใจจะเลื่อนดูส่วนอื่น/ถ่างซูม) ให้ยกเลิกการวาดเส้น และเปิดให้จอสไลด์ได้เลย
+            // แก้ไขจุดที่ 1: เช็คว่าถ้าใช้มากกว่า 1 นิ้วสัมผัสจอ ให้ยกเลิกการลากเส้นวาดทันที และไม่ทำ preventDefault เพื่อเปิดให้จอสไลด์ได้
             if (e.touches && e.touches.length > 1) {
                 isDrawing = false;
                 return; 
             }
             
-            // ถ้าใช้เมาส์ หรือ 1 นิ้วเขียนทั่วไป ให้บล็อกจอเลื่อนชั่วคราวเพื่อเขียนหนังสือ
+            // ถ้าใช้ 1 นิ้วเซ็นชื่อตามปกติ ให้ทำคำสั่งบล็อกจอเลื่อนเพื่อความแม่นยำในการเขียน
             if (e.type === 'touchstart') e.preventDefault();
             
             isDrawing = true;
@@ -340,7 +339,7 @@
         function draw(e) {
             if (!isDrawing) return;
             
-            // ป้องกันการลากเส้นหากตรวจพบว่านิ้วที่สองโผล่มากลางคันระหว่างวาด
+            // แก้ไขจุดที่ 2: ถ้าตรวจจับได้ว่ามีนิ้วที่สองแตะเข้ามาเพิ่มกลางคันระหว่างลากปากกา ให้หยุดวาดทันทีเพื่อปล่อยให้สไลด์จอ
             if (e.touches && e.touches.length > 1) {
                 isDrawing = false;
                 return;
