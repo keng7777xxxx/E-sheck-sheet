@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Search & Writer (Multi-Page, Zoom, Undo, Scroll Fixed)</title>
+    <title>PDF Search & Writer (Multi-Page, Zoom, Undo, Mode Switch)</title>
     
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
@@ -27,9 +27,13 @@
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; cursor: not-allowed; }
         
-        .page-controls, .zoom-controls { display: flex; align-items: center; gap: 5px; background: #fff; padding: 5px 10px; border-radius: 5px; border: 1px solid #ccc; }
+        .page-controls, .zoom-controls, .mode-controls { display: flex; align-items: center; gap: 5px; background: #fff; padding: 5px 10px; border-radius: 5px; border: 1px solid #ccc; }
         .zoom-controls button { padding: 5px 10px; font-weight: bold; }
         
+        /* สไตล์ของปุ่มสลับโหมด */
+        .mode-btn { background: #6c757d; font-weight: bold; }
+        .mode-btn.active { background: #28a745; color: white; }
+
         #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
         
         #scroll-wrapper { 
@@ -44,6 +48,9 @@
         }
         #canvas-container { position: relative; background: white; margin: 10px auto; display: block; }
         canvas { display: block; cursor: crosshair; }
+        
+        /* เมื่อเปิดโหมดเลื่อนหน้าจอ ให้เปลี่ยนสัญลักษณ์เมาส์เป็นรูปมือ */
+        canvas.mode-scroll { cursor: grab; touch-action: auto !important; }
     </style>
 </head>
 <body>
@@ -65,6 +72,11 @@
             <span id="zoom-percent">100%</span>
             <button id="zoom-in-btn" disabled>🔍+ ขยาย</button>
             <button id="zoom-reset-btn" style="background:#6c757d;" disabled>พอดีหน้าจอ</button>
+        </div>
+
+        <div class="mode-controls">
+            <button id="draw-mode-btn" class="mode-btn active" disabled>✏️ โหมดปากกา</button>
+            <button id="scroll-mode-btn" class="mode-btn" disabled>🖐️ โหมดเลื่อนจอ</button>
         </div>
 
         <button id="undo-btn" style="background:#ffc107; color:#000;" disabled>↩️ ย้อนกลับ</button>
@@ -95,7 +107,7 @@
         const clearBtn = document.getElementById('clear-btn');
         const undoBtn = document.getElementById('undo-btn'); 
         const canvas = document.getElementById('pdf-canvas');
-        const canvasContainer = document.getElementById('canvas-container'); // ตัวแปรคุมกล่องรอบนอก (C ตัวใหญ่)
+        const canvasContainer = document.getElementById('canvas-container');
         const ctx = canvas.getContext('2d');
         
         const prevPageBtn = document.getElementById('prev-page-btn');
@@ -106,6 +118,10 @@
         const zoomOutBtn = document.getElementById('zoom-out-btn');
         const zoomResetBtn = document.getElementById('zoom-reset-btn');
         const zoomPercentText = document.getElementById('zoom-percent');
+
+        // ปุ่มควบคุมโหมด
+        const drawModeBtn = document.getElementById('draw-mode-btn');
+        const scrollModeBtn = document.getElementById('scroll-mode-btn');
         
         let pdfBytes = null;
         let pdfDocLib = null; 
@@ -119,8 +135,8 @@
         let currentZoomLevel = 1.0; 
         
         let drawingActionsByPage = {}; 
+        let currentMode = "draw"; // โหมดเริ่มต้นคือ "draw" (ปากกา), สลับเป็น "scroll" (เลื่อนจอ)
 
-        // ล็อกค่าความหนาของเส้นไว้ที่ 0.5px
         const fixedThickness = 0.5;
 
         // === 1. ระบบค้นหาไฟล์ ===
@@ -164,6 +180,7 @@
             drawingActionsByPage = {}; 
             currentPageNum = 1;
             currentZoomLevel = 1.0; 
+            switchMode("draw"); // โหลดไฟล์ใหม่ ให้กลับมาโหมดปากกาเสมอ
 
             try {
                 const response = await fetch(fileName);
@@ -184,6 +201,8 @@
                 zoomInBtn.disabled = false;
                 zoomOutBtn.disabled = false;
                 zoomResetBtn.disabled = false;
+                drawModeBtn.disabled = false;
+                scrollModeBtn.disabled = false;
             } catch (error) {
                 statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
                 saveBtn.disabled = true;
@@ -204,7 +223,6 @@
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
                 
-                // แก้ไขจุดนี้: ปรับแก้ชื่อตัวแปรให้ตรงกับประกาศด้านบน (canvasContainer มี C พิมพ์ใหญ่) และใช้หน่วย px ให้ถูกต้อง
                 canvasContainer.style.width = scaledViewport.width + 'px';
                 canvasContainer.style.height = scaledViewport.height + 'px';
                 
@@ -221,7 +239,7 @@
                 }
 
                 zoomPercentText.innerText = `${Math.round(currentZoomLevel * 100)}%`;
-                statusText.innerText = `หน้า ${pageNumber} โหลดสำเร็จ! ซูมเขียนและเลื่อนหน้าจอได้`;
+                statusText.innerText = currentMode === "draw" ? `หน้า ${pageNumber} โหลดสำเร็จ! ใช้ปากกาเขียนได้เลย` : `หน้า ${pageNumber} โหลดสำเร็จ! ใช้นิ้วปัดเลื่อนหน้าจอได้อิสระ`;
                 updatePageControls();
                 updateUndoButtonState(); 
             } catch (error) {
@@ -262,7 +280,26 @@
             undoBtn.disabled = (actions.length === 0);
         }
 
-        // === 4. ระบบกดปุ่มควบคุมการ Zoom ===
+        // === 4. ระบบสลับโหมด (ปากกา / เลื่อนจอ) ===
+        function switchMode(mode) {
+            currentMode = mode;
+            if (mode === "draw") {
+                drawModeBtn.classList.add("active");
+                scrollModeBtn.classList.remove("active");
+                canvas.classList.remove("mode-scroll");
+                statusText.innerText = "เปิดโหมดปากกาแล้ว (ใช้นิ้วเขียนหนังสือ)";
+            } else {
+                drawModeBtn.classList.remove("active");
+                scrollModeBtn.classList.add("active");
+                canvas.classList.add("mode-scroll");
+                statusText.innerText = "เปิดโหมดเลื่อนจอแล้ว (ใช้ 1 นิ้วปัดเลื่อนกระดาษดูจุดอื่นๆ ได้เลย)";
+            }
+        }
+
+        drawModeBtn.addEventListener('click', () => switchMode("draw"));
+        scrollModeBtn.addEventListener('click', () => switchMode("scroll"));
+
+        // === ระบบควบคุมการ Zoom ===
         zoomInBtn.addEventListener('click', () => {
             if (currentZoomLevel < 3.0) { currentZoomLevel += 0.25; renderPage(currentPageNum); }
         });
@@ -297,7 +334,7 @@
             renderPage(currentPageNum);
         });
 
-        // === 5. ระบบตรวจจับปากกา (ซ่อมส่วนเงื่อนไขปล่อยฟรีเมื่อใช้ 2 นิ้วปัดเลื่อนจอ) ===
+        // === 5. ระบบตรวจจับปากกา ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -308,13 +345,13 @@
         function startDrawing(e) {
             if (!pdfBytes) return;
             
-            // เช็คจำนวนนิ้ว: ถ้าใช้มากกว่า 1 นิ้ว (2 นิ้วถ่างขยายหรือเลื่อนจอ) ให้สลัดบอร์ดปากกาทิ้ง เพื่อให้หน้าจอเลื่อนได้อิสระ
-            if (e.touches && e.touches.length > 1) {
+            // สำคัญที่สุด: ถ้าปัจจุบันอยู่ในโหมด "เลื่อนจอ" ให้ปล่อยผ่าน ห้ามวาดเส้น ห้ามบล็อกเบราว์เซอร์
+            if (currentMode === "scroll") {
                 isDrawing = false;
                 return; 
             }
             
-            // ล็อกหน้าจอเฉพาะเมื่อลากเส้นวาดปากกา 1 นิ้วเท่านั้น
+            // ถ้าอยู่ในโหมดปากกา ให้ทำการบล็อกจอเลื่อนเพื่อลากเส้น
             if (e.type === 'touchstart') e.preventDefault();
             
             isDrawing = true;
@@ -337,13 +374,7 @@
         }
 
         function draw(e) {
-            if (!isDrawing) return;
-            
-            // ถ้าตรวจเจอนิ้วที่ 2 แตะลงมากลางคันขณะเขียน ให้ตัดเส้นวาดทิ้ง เพื่อส่งไม้ต่อให้เบราว์เซอร์เปิดโหมดสไลด์หน้าจอทันที
-            if (e.touches && e.touches.length > 1) {
-                isDrawing = false;
-                return;
-            }
+            if (!isDrawing || currentMode === "scroll") return;
             
             if (e.type === 'touchmove') e.preventDefault();
             const pos = getPos(e);
