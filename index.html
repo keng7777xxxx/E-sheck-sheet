@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Search & Writer</title>
+    <title>PDF Search & Writer (Multi-Page)</title>
     
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     
@@ -27,8 +27,10 @@
         button { background: #007bff; color: white; border: none; cursor: pointer; }
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; cursor: not-allowed; }
-        #status { font-size: 14px; color: #555; font-weight: bold; }
-        #canvas-container { position: relative; border: 2px solid #333; background: white; max-width: 100%; display: inline-block; }
+        
+        .page-controls { display: flex; align-items: center; gap: 10px; background: #fff; padding: 5px 10px; border-radius: 5px; border: 1px solid #ccc; }
+        #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
+        #canvas-container { position: relative; border: 2px solid #333; background: white; max-width: 100%; display: inline-block; margin-top: 10px; }
         canvas { display: block; cursor: crosshair; }
     </style>
 </head>
@@ -40,9 +42,16 @@
             <div id="search-results" class="search-results"></div>
         </div>
         
+        <div class="page-controls">
+            <button id="prev-page-btn" disabled>◀ หน้าก่อนหน้า</button>
+            <span id="page-num-display">หน้า: 0 / 0</span>
+            <button id="next-page-btn" disabled>หน้าถัดไป ▶</button>
+        </div>
+
         <button id="save-btn" disabled>Save As PDF</button>
-        <button id="clear-btn" style="background:#dc3545;">ล้างหน้าจอ</button>
-        <span id="status">กรุณาพิมพ์ค้นหาไฟล์ PDF ที่ต้องการ</span>
+        <button id="clear-btn" style="background:#dc3545;">ล้างหน้าเฉพาะหน้านี้</button>
+        
+        <div id="status">กรุณาพิมพ์ค้นหาไฟล์ PDF ที่ต้องการ</div>
     </div>
 
     <div id="canvas-container">
@@ -50,7 +59,6 @@
     </div>
 
     <script>
-        // ตั้งค่าพาสเวิร์กเกอร์ของ PDF.js
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
         const pdfFiles = [
@@ -66,14 +74,23 @@
         const canvas = document.getElementById('pdf-canvas');
         const ctx = canvas.getContext('2d');
         
+        // ตัวควบคุมหน้า
+        const prevPageBtn = document.getElementById('prev-page-btn');
+        const nextPageBtn = document.getElementById('next-page-btn');
+        const pageNumDisplay = document.getElementById('page-num-display');
+        
         let pdfBytes = null;
+        let pdfDocLib = null; 
         let isDrawing = false;
-        let drawingActions = [];
         let currentFileName = "document.pdf";
-        let originalPdfWidth = 0;
-        let originalPdfHeight = 0;
+        
+        let currentPageNum = 1;
+        let totalPagesCount = 0;
+        
+        // ตัวเก็บประวัติการวาดแยกตามหน้า เช่น { 1: [...], 2: [...] }
+        let drawingActionsByPage = {}; 
 
-        // === ค้นหาไฟล์ ===
+        // === 1. ระบบค้นหาไฟล์ ===
         searchInput.addEventListener('input', (e) => {
             const keyword = e.target.value.toLowerCase();
             searchResults.innerHTML = '';
@@ -105,7 +122,7 @@
                 const div = document.createElement('div');
                 div.className = 'search-item';
                 div.style.color = '#999';
-                div.innerText = '❌ 不พบไฟล์ที่ตรงกัน';
+                div.innerText = '❌ ไม่พบไฟล์ที่ตรงกัน';
                 searchResults.appendChild(div);
                 searchResults.style.display = 'block';
             }
@@ -117,51 +134,115 @@
             }
         });
 
-        // === ฟังก์ชันดึงและวาด PDF ลงหน้าจอ ===
+        // === 2. ฟังก์ชันดึงไฟล์ PDF ต้นฉบับมาอ่านค่า ===
         async function loadPdfFile(fileName) {
-            statusText.innerText = "กำลังดึงไฟล์และเรนเดอร์หน้าจอ...";
+            statusText.innerText = "กำลังดึงไฟล์จากเซิร์ฟเวอร์...";
             currentFileName = fileName;
-            drawingActions = [];
+            drawingActionsByPage = {}; // รีเซ็ตประวัติการวาดใหม่ทั้งหมด
+            currentPageNum = 1;
 
             try {
                 const response = await fetch(fileName);
                 if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์ กรุณาตรวจสอบชื่อไฟล์ PDF');
                 
                 pdfBytes = await response.arrayBuffer();
-
-                // 1. ใช้ PDF.js โหลดมาวาดบนหน้าจอก่อน
-                const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes.slice(0)) });
-                const pdfViewerDoc = await loadingTask.promise;
-                const page = await pdfViewerDoc.getPage(1);
                 
-                // คำนวณขนาดหน้าจอคู่ขนานเพื่อให้เหมาะกับอุปกรณ์
-                const viewport = page.getViewport({ scale: 1.0 });
-                originalPdfWidth = viewport.width;
-                originalPdfHeight = viewport.height;
+                // นับจำนวนหน้าทั้งหมดโดยใช้ PDFJS
+                const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes.slice(0)) });
+                pdfDocLib = await loadingTask.promise;
+                totalPagesCount = pdfDocLib.numPages;
 
-                const displayScale = Math.min((window.innerWidth - 30) / originalPdfWidth, 1.5);
+                // เรนเดอร์หน้าแรกขึ้นจอ
+                await renderPage(currentPageNum);
+                
+                saveBtn.disabled = false;
+            } catch (error) {
+                statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
+                saveBtn.disabled = true;
+                updatePageControls();
+            }
+        }
+
+        // === 3. ฟังก์ชันเรนเดอร์เนื้อหาแต่ละหน้าลงจอจริง ===
+        async function renderPage(pageNumber) {
+            if (!pdfDocLib) return;
+            statusText.innerText = `กำลังโหลดหน้าอนุมัติที่ ${pageNumber}...`;
+
+            try {
+                const page = await pdfDocLib.getPage(pageNumber);
+                const viewport = page.getViewport({ scale: 1.0 });
+                
+                const displayScale = Math.min((window.innerWidth - 30) / viewport.width, 1.5);
                 const scaledViewport = page.getViewport({ scale: displayScale });
 
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
                 canvas.dataset.scale = displayScale;
 
-                // สั่งวาดเนื้อหา PDF ลงบน Canvas จริงๆ
                 const renderContext = {
                     canvasContext: ctx,
                     viewport: scaledViewport
                 };
                 await page.render(renderContext).promise;
-                
-                statusText.innerText = "โหลดสำเร็จ! เริ่มเขียนบนหน้าจอได้เลย";
-                saveBtn.disabled = false;
+
+                // หากหน้านี้เคยมีเส้นวาดไว้ก่อน ให้วาดกลับขึ้นมาแสดงผลด้วย
+                if (drawingActionsByPage[pageNumber]) {
+                    redrawCurrentPageLines();
+                }
+
+                statusText.innerText = `โหลดหน้า ${pageNumber} สำเร็จ! สามารถเขียนลงหน้าจอได้`;
+                updatePageControls();
             } catch (error) {
-                statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
-                saveBtn.disabled = true;
+                statusText.innerText = "เกิดข้อผิดพลาดในการแสดงผลหน้า: " + error.message;
             }
         }
 
-        // === ระบบวาดเส้น ===
+        // ฟังก์ชันวาดเส้นซ้ำสำหรับหน้าที่บันทึกไว้ชั่วคราว
+        function redrawCurrentPageLines() {
+            const actions = drawingActionsByPage[currentPageNum] || [];
+            const displayScale = parseFloat(canvas.dataset.scale);
+
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#000000';
+            ctx.lineCap = 'round';
+
+            actions.forEach(action => {
+                const screenX = action.x * displayScale;
+                const screenY = action.y * displayScale;
+
+                if (action.type === 'start') {
+                    ctx.beginPath();
+                    ctx.moveTo(screenX, screenY);
+                } else if (action.type === 'move') {
+                    ctx.lineTo(screenX, screenY);
+                    ctx.stroke();
+                }
+            });
+        }
+
+        // อัปเดตสถานะของปุ่มกดเปลี่ยนหน้า
+        function updatePageControls() {
+            pageNumDisplay.innerText = `หน้า: ${currentPageNum} / ${totalPagesCount}`;
+            prevPageBtn.disabled = (currentPageNum <= 1);
+            nextPageBtn.disabled = (currentPageNum >= totalPagesCount);
+        }
+
+        // เหตุการณ์กดปุ่มเปลี่ยนหน้า
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageNum > 1) {
+                currentPageNum--;
+                renderPage(currentPageNum);
+            }
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPageNum < totalPagesCount) {
+                currentPageNum++;
+                renderPage(currentPageNum);
+            }
+        });
+
+        // === 4. ระบบรับค่าตรวจจับการวาดเส้นแยกหน้า ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -181,7 +262,13 @@
             ctx.lineCap = 'round';
             
             const displayScale = parseFloat(canvas.dataset.scale);
-            drawingActions.push({ type: 'start', x: pos.x / displayScale, y: pos.y / displayScale });
+            if (!drawingActionsByPage[currentPageNum]) drawingActionsByPage[currentPageNum] = [];
+            
+            drawingActionsByPage[currentPageNum].push({ 
+                type: 'start', 
+                x: pos.x / displayScale, 
+                y: pos.y / displayScale 
+            });
         }
 
         function draw(e) {
@@ -192,7 +279,11 @@
             ctx.stroke();
 
             const displayScale = parseFloat(canvas.dataset.scale);
-            drawingActions.push({ type: 'move', x: pos.x / displayScale, y: pos.y / displayScale });
+            drawingActionsByPage[currentPageNum].push({ 
+                type: 'move', 
+                x: pos.x / displayScale, 
+                y: pos.y / displayScale 
+            });
         }
 
         function stopDrawing() { isDrawing = false; }
@@ -206,54 +297,62 @@
         canvas.addEventListener('mouseup', stopDrawing);
         canvas.addEventListener('mouseleave', stopDrawing);
 
-        // รีเซ็ตหน้าจอ (โหลดเอกสารเดิมมาทับเพื่อล้างเส้นวาด)
         clearBtn.addEventListener('click', () => {
-            if(currentFileName && pdfBytes) {
-                loadPdfFile(currentFileName);
+            if(pdfBytes) {
+                drawingActionsByPage[currentPageNum] = []; // ลบข้อมูลการวาดเฉพาะหน้านี้
+                renderPage(currentPageNum); // สั่งเรนเดอร์ภาพพื้นหลังใหม่ทับ
             }
         });
 
-        // === ระบบบันทึกไฟล์ (Save As PDF) ===
+        // === 5. ระบบบันทึกไฟล์ (Save As PDF รวมทุกหน้า) ===
         saveBtn.addEventListener('click', async () => {
             if (!pdfBytes) return;
 
-            statusText.innerText = "กำลังประมวลผลไฟล์...";
-            // นำไฟล์ต้นฉบับมาเขียนทับด้วย PDFLib
-            const pdfDoc = await PDFLib.PDFDocument.load(pdfBytes);
-            const pages = pdfDoc.getPages();
-            const firstPage = pages[0];
-            const { height } = firstPage.getSize();
+            statusText.innerText = "กำลังฝังลายเส้นลงเอกสารทุกหน้า...";
+            
+            // นำไฟล์ PDF ต้นฉบับมาประมวลผลเซฟผ่าน PDFLib
+            const pdfDocModifier = await PDFLib.PDFDocument.load(pdfBytes);
+            const pages = pdfDocModifier.getPages();
 
-            let lastX = 0;
-            let lastY = 0;
+            // ลูปเขียนข้อมูลเส้นลงไปในแต่ละหน้าที่มีการวาดจริง
+            Object.keys(drawingActionsByPage).forEach(pageIdxStr => {
+                const pageIndex = parseInt(pageIdxStr) - 1; // อาร์เรย์ของ PDF หน้าเริ่มที่ 0
+                const targetPage = pages[pageIndex];
+                if (!targetPage) return;
 
-            drawingActions.forEach(action => {
-                // คำนวณพิกัด Y กลับด้านเนื่องจากพิกัด PDF เริ่มจากซ้ายล่าง
-                const pdfY = height - action.y; 
+                const { height } = targetPage.getSize();
+                const actions = drawingActionsByPage[pageIdxStr];
+                
+                let lastX = 0;
+                let lastY = 0;
 
-                if (action.type === 'start') {
-                    lastX = action.x;
-                    lastY = pdfY;
-                } else if (action.type === 'move') {
-                    firstPage.drawLine({
-                        start: { x: lastX, y: lastY },
-                        end: { x: action.x, y: pdfY },
-                        thickness: 3,
-                        color: PDFLib.rgb(0, 0, 0),
-                    });
-                    lastX = action.x;
-                    lastY = pdfY;
-                }
+                actions.forEach(action => {
+                    const pdfY = height - action.y; 
+
+                    if (action.type === 'start') {
+                        lastX = action.x;
+                        lastY = pdfY;
+                    } else if (action.type === 'move') {
+                        targetPage.drawLine({
+                            start: { x: lastX, y: lastY },
+                            end: { x: action.x, y: pdfY },
+                            thickness: 3,
+                            color: PDFLib.rgb(0, 0, 0),
+                        });
+                        lastX = action.x;
+                        lastY = pdfY;
+                    }
+                });
             });
 
-            const modifiedPdfBytes = await pdfDoc.save();
+            const modifiedPdfBytes = await pdfDocModifier.save();
             const blob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             
             link.download = "signed_" + currentFileName;
             link.click();
-            statusText.innerText = "บันทึกไฟล์สำเร็จ!";
+            statusText.innerText = "บันทึกและดาวน์โหลดไฟล์ใหม่สำเร็จ!";
         });
     </script>
 </body>
