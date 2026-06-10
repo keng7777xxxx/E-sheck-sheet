@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Search & Writer (Multi-Page with Zoom)</title>
+    <title>PDF Search & Writer (Multi-Page with Zoom & Undo)</title>
     
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-    
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 
     <style>
@@ -33,7 +32,6 @@
         
         #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
         
-        /* เพิ่มตู้คอนเทนเนอร์ให้มี Scrollbar เผื่อเวลาซูมใหญ่กว่าหน้าจอ */
         #scroll-wrapper { width: 100%; overflow: auto; border: 2px solid #333; background: #525659; border-radius: 5px; margin-top: 10px; }
         #canvas-container { position: relative; background: white; margin: 10px auto; display: block; }
         canvas { display: block; cursor: crosshair; }
@@ -60,6 +58,7 @@
             <button id="zoom-reset-btn" style="background:#6c757d;" disabled>พอดีหน้าจอ</button>
         </div>
 
+        <button id="undo-btn" style="background:#ffc107; color:#000;" disabled>↩️ ย้อนกลับ</button>
         <button id="save-btn" disabled>Save As PDF</button>
         <button id="clear-btn" style="background:#dc3545;">ล้างหน้าเฉพาะหน้านี้</button>
         
@@ -85,6 +84,7 @@
         const statusText = document.getElementById('status');
         const saveBtn = document.getElementById('save-btn');
         const clearBtn = document.getElementById('clear-btn');
+        const undoBtn = document.getElementById('undo-btn'); // ดึง Element ปุ่ม Undo
         const canvas = document.getElementById('pdf-canvas');
         const canvasContainer = document.getElementById('canvas-container');
         const ctx = canvas.getContext('2d');
@@ -93,7 +93,6 @@
         const nextPageBtn = document.getElementById('next-page-btn');
         const pageNumDisplay = document.getElementById('page-num-display');
         
-        // ประกาศตัวแปรระบบซูม
         const zoomInBtn = document.getElementById('zoom-in-btn');
         const zoomOutBtn = document.getElementById('zoom-out-btn');
         const zoomResetBtn = document.getElementById('zoom-reset-btn');
@@ -107,9 +106,8 @@
         let currentPageNum = 1;
         let totalPagesCount = 0;
         
-        // ตัวแปรเก็บขนาดเริ่มต้นเพื่อคำนวณอัตราซูม
         let baseScale = 1.0; 
-        let currentZoomLevel = 1.0; // 1.0 = 100%, 1.5 = 150%
+        let currentZoomLevel = 1.0; 
         
         let drawingActionsByPage = {}; 
 
@@ -153,7 +151,7 @@
             currentFileName = fileName;
             drawingActionsByPage = {}; 
             currentPageNum = 1;
-            currentZoomLevel = 1.0; // รีเซ็ตระดับซูมกลับไปเริ่มต้นทุกครั้งที่โหลดไฟล์ใหม่
+            currentZoomLevel = 1.0; 
 
             try {
                 const response = await fetch(fileName);
@@ -164,7 +162,6 @@
                 pdfDocLib = await loadingTask.promise;
                 totalPagesCount = pdfDocLib.numPages;
 
-                // คำนวณหาค่าสเกลเริ่มต้นให้พอดีกับความกว้างหน้าจอของอุปกรณ์นั้นๆ
                 const page = await pdfDocLib.getPage(currentPageNum);
                 const viewport = page.getViewport({ scale: 1.0 });
                 baseScale = Math.min((window.innerWidth - 40) / viewport.width, 1.5);
@@ -189,18 +186,14 @@
 
             try {
                 const page = await pdfDocLib.getPage(pageNumber);
-                
-                // สเกลจริง = สเกลฐานฐานของหน้าจอ x ตัวคูณระดับซูมปัจจุบัน
                 const finalScale = baseScale * currentZoomLevel;
                 const scaledViewport = page.getViewport({ scale: finalScale });
 
-                // ปรับขนาดของบอร์ด Canvas และกรอบ Container ให้ใหญ่ยืดตามขยายตัวซูม
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
                 canvasContainer.style.width = scaledViewport.width + 'png';
                 canvasContainer.style.height = scaledViewport.height + 'png';
                 
-                // เก็บค่าสเกลไฟนอลไว้คำนวณพิกัดปากกา
                 canvas.dataset.finalScale = finalScale; 
 
                 const renderContext = {
@@ -209,7 +202,6 @@
                 };
                 await page.render(renderContext).promise;
 
-                // วาดเส้นที่บันทึกไว้กลับขึ้นมา (คำนวณสเกลขยายตามอัตโนมัติ)
                 if (drawingActionsByPage[pageNumber]) {
                     redrawCurrentPageLines();
                 }
@@ -217,6 +209,7 @@
                 zoomPercentText.innerText = `${Math.round(currentZoomLevel * 100)}%`;
                 statusText.innerText = `หน้า ${pageNumber} โหลดสำเร็จ! ซูมเขียนและเลื่อนหน้าจอได้`;
                 updatePageControls();
+                updateUndoButtonState(); // เช็คสถานะปุ่ม Undo ตอนสลับหน้า
             } catch (error) {
                 statusText.innerText = "เกิดข้อผิดพลาดในการซูม/เรนเดอร์หน้า: " + error.message;
             }
@@ -231,7 +224,6 @@
             ctx.lineCap = 'round';
 
             actions.forEach(action => {
-                // เอาระยะพิกัดจริงของ PDF คูณกับ สเกลซูมไฟนอล ณ เวลานั้น เพื่อให้เส้นขยายตามภาพหลังซูม
                 const screenX = action.x * finalScale;
                 const screenY = action.y * finalScale;
 
@@ -251,24 +243,23 @@
             nextPageBtn.disabled = (currentPageNum >= totalPagesCount);
         }
 
+        // เช็คเปิดปิดการทำงานของปุ่ม Undo
+        function updateUndoButtonState() {
+            const actions = drawingActionsByPage[currentPageNum] || [];
+            undoBtn.disabled = (actions.length === 0);
+        }
+
         // === 4. ระบบกดปุ่มควบคุมการ Zoom ===
         zoomInBtn.addEventListener('click', () => {
-            if (currentZoomLevel < 3.0) { // ล็อกให้ซูมเข้าสูงสุดได้ 300%
-                currentZoomLevel += 0.25; // เพิ่มทีละ 25%
-                renderPage(currentPageNum);
-            }
+            if (currentZoomLevel < 3.0) { currentZoomLevel += 0.25; renderPage(currentPageNum); }
         });
 
         zoomOutBtn.addEventListener('click', () => {
-            if (currentZoomLevel > 0.5) { // ล็อกให้ย่อขนาดต่ำสุดได้ 50%
-                currentZoomLevel -= 0.25; // ลดทีละ 25%
-                renderPage(currentPageNum);
-            }
+            if (currentZoomLevel > 0.5) { currentZoomLevel -= 0.25; renderPage(currentPageNum); }
         });
 
         zoomResetBtn.addEventListener('click', () => {
-            currentZoomLevel = 1.0; // รีเซ็ตสเกลกลับมาค่ามาตรฐานพอดีหน้าจอ
-            renderPage(currentPageNum);
+            currentZoomLevel = 1.0; renderPage(currentPageNum);
         });
 
         prevPageBtn.addEventListener('click', () => {
@@ -279,114 +270,25 @@
             if (currentPageNum < totalPagesCount) { currentPageNum++; renderPage(currentPageNum); }
         });
 
-        // === 5. ระบบตรวจจับปากกา (วาดเส้นสัมพันธ์แม่นยำกับสเกลซูม) ===
+        // === ระบบปุ่ม Undo (ย้อนกลับ) ===
+        undoBtn.addEventListener('click', () => {
+            let actions = drawingActionsByPage[currentPageNum] || [];
+            if (actions.length === 0) return;
+
+            // ค่อยๆ ลบประวัติจุดลากเส้น (move) ย้อนกลับไปจนถึงจุดที่เริ่มจรดปากกา (start)
+            while (actions.length > 0) {
+                const lastAction = actions.pop();
+                if (lastAction.type === 'start') {
+                    break; // ลบจนครบลูปของหนึ่งเส้นวาดแล้วให้หยุด
+                }
+            }
+
+            // สั่งโหลดภาพหน้ากระดาษและวาดเส้นที่เหลือทับใหม่
+            renderPage(currentPageNum);
+        });
+
+        // === 5. ระบบตรวจจับปากกา ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            return { x: clientX - rect.left, y: clientY - rect.top };
-        }
-
-        function startDrawing(e) {
-            if (!pdfBytes) return;
-            if (e.type === 'touchstart') e.preventDefault();
-            isDrawing = true;
-            const pos = getPos(e);
-            ctx.beginPath();
-            ctx.moveTo(pos.x, pos.y);
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = '#000000';
-            ctx.lineCap = 'round';
-            
-            const finalScale = parseFloat(canvas.dataset.finalScale);
-            if (!drawingActionsByPage[currentPageNum]) drawingActionsByPage[currentPageNum] = [];
-            
-            // หารสเกลออกเพื่อแปลงค่าพิกัดพิกเซลบนหน้าจอให้กลายเป็นพิกัดสากลของไฟล์ PDF จริง (ป้องกันเส้นเบี้ยวเวลากดซูมเข้าออก)
-            drawingActionsByPage[currentPageNum].push({ 
-                type: 'start', 
-                x: pos.x / finalScale, 
-                y: pos.y / finalScale 
-            });
-        }
-
-        function draw(e) {
-            if (!isDrawing) return;
-            if (e.type === 'touchmove') e.preventDefault();
-            const pos = getPos(e);
-            ctx.lineTo(pos.x, pos.y);
-            ctx.stroke();
-
-            const finalScale = parseFloat(canvas.dataset.finalScale);
-            drawingActionsByPage[currentPageNum].push({ 
-                type: 'move', 
-                x: pos.x / finalScale, 
-                y: pos.y / finalScale 
-            });
-        }
-
-        function stopDrawing() { isDrawing = false; }
-
-        canvas.addEventListener('touchstart', startDrawing);
-        canvas.addEventListener('touchmove', draw);
-        canvas.addEventListener('touchend', stopDrawing);
-
-        canvas.addEventListener('mousedown', startDrawing);
-        canvas.addEventListener('mousemove', draw);
-        canvas.addEventListener('mouseup', stopDrawing);
-        canvas.addEventListener('mouseleave', stopDrawing);
-
-        clearBtn.addEventListener('click', () => {
-            if(pdfBytes) {
-                drawingActionsByPage[currentPageNum] = []; 
-                renderPage(currentPageNum); 
-            }
-        });
-
-        // === 6. ระบบรวมเอกสารบันทึกส่งออก (Save As PDF) ===
-        saveBtn.addEventListener('click', async () => {
-            if (!pdfBytes) return;
-
-            statusText.innerText = "กำลังประมวลผลฝังเส้นวาดลงไฟล์ฉบับเต็ม...";
-            const pdfDocModifier = await PDFLib.PDFDocument.load(pdfBytes);
-            const pages = pdfDocModifier.getPages();
-
-            Object.keys(drawingActionsByPage).forEach(pageIdxStr => {
-                const pageIndex = parseInt(pageIdxStr) - 1; 
-                const targetPage = pages[pageIndex];
-                if (!targetPage) return;
-
-                const { height } = targetPage.getSize();
-                const actions = drawingActionsByPage[pageIdxStr];
-                
-                let lastX = 0; lastY = 0;
-
-                actions.forEach(action => {
-                    const pdfY = height - action.y; 
-
-                    if (action.type === 'start') {
-                        lastX = action.x;
-                        lastY = pdfY;
-                    } else if (action.type === 'move') {
-                        targetPage.drawLine({
-                            start: { x: lastX, y: lastY },
-                            end: { x: action.x, y: pdfY },
-                            thickness: 3,
-                            color: PDFLib.rgb(0, 0, 0),
-                        });
-                        lastX = action.x; lastY = pdfY;
-                    }
-                });
-            });
-
-            const modifiedPdfBytes = await pdfDocModifier.save();
-            const blob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            
-            link.download = "signed_" + currentFileName;
-            link.click();
-            statusText.innerText = "ดาวน์โหลดไฟล์ PDF ตัวซูมเขียนสำเร็จ!";
-        });
-    </script>
-</body>
-</html>
+            const client
