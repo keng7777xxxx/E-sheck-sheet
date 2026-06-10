@@ -90,4 +90,313 @@
         const ctx = canvas.getContext('2d');
         
         const prevPageBtn = document.getElementById('prev-page-btn');
-        const nextPageBtn = document.
+        const nextPageBtn = document.getElementById('next-page-btn');
+        const pageNumDisplay = document.getElementById('page-num-display');
+        
+        const zoomInBtn = document.getElementById('zoom-in-btn');
+        const zoomOutBtn = document.getElementById('zoom-out-btn');
+        const zoomResetBtn = document.getElementById('zoom-reset-btn');
+        const zoomPercentText = document.getElementById('zoom-percent');
+        
+        let pdfBytes = null;
+        let pdfDocLib = null; 
+        let isDrawing = false;
+        let currentFileName = "document.pdf";
+        
+        let currentPageNum = 1;
+        let totalPagesCount = 0;
+        
+        let baseScale = 1.0; 
+        let currentZoomLevel = 1.0; 
+        
+        let drawingActionsByPage = {}; 
+
+        // === 1. ระบบค้นหาไฟล์ ===
+        searchInput.addEventListener('input', (e) => {
+            const keyword = e.target.value.toLowerCase();
+            searchResults.innerHTML = '';
+            if (!keyword) { searchResults.style.display = 'none'; return; }
+
+            const matchedFiles = pdfFiles.filter(file => 
+                file.name.toLowerCase().includes(keyword) || file.label.toLowerCase().includes(keyword)
+            );
+
+            if (matchedFiles.length > 0) {
+                matchedFiles.forEach(file => {
+                    const div = document.createElement('div');
+                    div.className = 'search-item';
+                    div.innerText = file.label;
+                    div.addEventListener('click', () => {
+                        searchInput.value = file.label;
+                        searchResults.style.display = 'none';
+                        loadPdfFile(file.name);
+                    });
+                    searchResults.appendChild(div);
+                });
+                searchResults.style.display = 'block';
+            } else {
+                const div = document.createElement('div');
+                div.className = 'search-item'; div.style.color = '#999'; div.innerText = '❌ ไม่พบไฟล์ที่ตรงกัน';
+                searchResults.appendChild(div); searchResults.style.display = 'block';
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.search-container')) { searchResults.style.display = 'none'; }
+        });
+
+        // === 2. ฟังก์ชันโหลดไฟล์ PDF ===
+        async function loadPdfFile(fileName) {
+            statusText.innerText = "กำลังดึงไฟล์จากเซิร์ฟเวอร์...";
+            currentFileName = fileName;
+            drawingActionsByPage = {}; 
+            currentPageNum = 1;
+            currentZoomLevel = 1.0; 
+
+            try {
+                const response = await fetch(fileName);
+                if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์ กรุณาตรวจสอบชื่อไฟล์ PDF');
+                pdfBytes = await response.arrayBuffer();
+                
+                const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes.slice(0)) });
+                pdfDocLib = await loadingTask.promise;
+                totalPagesCount = pdfDocLib.numPages;
+
+                const page = await pdfDocLib.getPage(currentPageNum);
+                const viewport = page.getViewport({ scale: 1.0 });
+                baseScale = Math.min((window.innerWidth - 40) / viewport.width, 1.5);
+
+                await renderPage(currentPageNum);
+                
+                saveBtn.disabled = false;
+                zoomInBtn.disabled = false;
+                zoomOutBtn.disabled = false;
+                zoomResetBtn.disabled = false;
+            } catch (error) {
+                statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
+                saveBtn.disabled = true;
+                updatePageControls();
+            }
+        }
+
+        // === 3. ฟังก์ชันเรนเดอร์เนื้อหาพร้อมคำนวณอัตราซูม ===
+        async function renderPage(pageNumber) {
+            if (!pdfDocLib) return;
+            statusText.innerText = `กำลังเรนเดอร์หน้าอนุมัติที่ ${pageNumber}... (ซูม: ${Math.round(currentZoomLevel * 100)}%)`;
+
+            try {
+                const page = await pdfDocLib.getPage(pageNumber);
+                const finalScale = baseScale * currentZoomLevel;
+                const scaledViewport = page.getViewport({ scale: finalScale });
+
+                canvas.width = scaledViewport.width;
+                canvas.height = scaledViewport.height;
+                
+                // แก้ไขจุดนี้: เปลี่ยนหน่วยจาก 'png' เป็น 'px' ให้ถูกต้องตามมาตรฐาน CSS
+                canvasContainer.style.width = scaledViewport.width + 'px';
+                canvasContainer.style.height = scaledViewport.height + 'px';
+                
+                canvas.dataset.finalScale = finalScale; 
+
+                const renderContext = {
+                    canvasContext: ctx,
+                    viewport: scaledViewport
+                };
+                await page.render(renderContext).promise;
+
+                if (drawingActionsByPage[pageNumber]) {
+                    redrawCurrentPageLines();
+                }
+
+                zoomPercentText.innerText = `${Math.round(currentZoomLevel * 100)}%`;
+                statusText.innerText = `หน้า ${pageNumber} โหลดสำเร็จ! ซูมเขียนและเลื่อนหน้าจอได้`;
+                updatePageControls();
+                updateUndoButtonState(); 
+            } catch (error) {
+                statusText.innerText = "เกิดข้อผิดพลาดในการซูม/เรนเดอร์หน้า: " + error.message;
+            }
+        }
+
+        function redrawCurrentPageLines() {
+            const actions = drawingActionsByPage[currentPageNum] || [];
+            const finalScale = parseFloat(canvas.dataset.finalScale);
+
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#000000';
+            ctx.lineCap = 'round';
+
+            actions.forEach(action => {
+                const screenX = action.x * finalScale;
+                const screenY = action.y * finalScale;
+
+                if (action.type === 'start') {
+                    ctx.beginPath();
+                    ctx.moveTo(screenX, screenY);
+                } else if (action.type === 'move') {
+                    ctx.lineTo(screenX, screenY);
+                    ctx.stroke();
+                }
+            });
+        }
+
+        function updatePageControls() {
+            pageNumDisplay.innerText = `หน้า: ${currentPageNum} / ${totalPagesCount}`;
+            prevPageBtn.disabled = (currentPageNum <= 1);
+            nextPageBtn.disabled = (currentPageNum >= totalPagesCount);
+        }
+
+        function updateUndoButtonState() {
+            const actions = drawingActionsByPage[currentPageNum] || [];
+            undoBtn.disabled = (actions.length === 0);
+        }
+
+        // === 4. ระบบกดปุ่มควบคุมการ Zoom ===
+        zoomInBtn.addEventListener('click', () => {
+            if (currentZoomLevel < 3.0) { currentZoomLevel += 0.25; renderPage(currentPageNum); }
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (currentZoomLevel > 0.5) { currentZoomLevel -= 0.25; renderPage(currentPageNum); }
+        });
+
+        zoomResetBtn.addEventListener('click', () => {
+            currentZoomLevel = 1.0; renderPage(currentPageNum);
+        });
+
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageNum > 1) { currentPageNum--; renderPage(currentPageNum); }
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPageNum < totalPagesCount) { currentPageNum++; renderPage(currentPageNum); }
+        });
+
+        // === ระบบปุ่ม Undo (ย้อนกลับ) ===
+        undoBtn.addEventListener('click', () => {
+            let actions = drawingActionsByPage[currentPageNum] || [];
+            if (actions.length === 0) return;
+
+            while (actions.length > 0) {
+                const lastAction = actions.pop();
+                if (lastAction.type === 'start') {
+                    break; 
+                }
+            }
+            renderPage(currentPageNum);
+        });
+
+        // === 5. ระบบตรวจจับปากกา ===
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return { x: clientX - rect.left, y: clientY - rect.top };
+        }
+
+        function startDrawing(e) {
+            if (!pdfBytes) return;
+            if (e.type === 'touchstart') e.preventDefault();
+            isDrawing = true;
+            const pos = getPos(e);
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#000000';
+            ctx.lineCap = 'round';
+            
+            const finalScale = parseFloat(canvas.dataset.finalScale);
+            if (!drawingActionsByPage[currentPageNum]) drawingActionsByPage[currentPageNum] = [];
+            
+            drawingActionsByPage[currentPageNum].push({ 
+                type: 'start', 
+                x: pos.x / finalScale, 
+                y: pos.y / finalScale 
+            });
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            if (e.type === 'touchmove') e.preventDefault();
+            const pos = getPos(e);
+            ctx.lineTo(pos.x, pos.y);
+            ctx.stroke();
+
+            const finalScale = parseFloat(canvas.dataset.finalScale);
+            drawingActionsByPage[currentPageNum].push({ 
+                type: 'move', 
+                x: pos.x / finalScale, 
+                y: pos.y / finalScale 
+            });
+        }
+
+        function stopDrawing() { 
+            if (isDrawing) {
+                isDrawing = false; 
+                updateUndoButtonState(); 
+            }
+        }
+
+        canvas.addEventListener('touchstart', startDrawing);
+        canvas.addEventListener('touchmove', draw);
+        canvas.addEventListener('touchend', stopDrawing);
+
+        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousemove', draw);
+        canvas.addEventListener('mouseup', stopDrawing);
+        canvas.addEventListener('mouseleave', stopDrawing);
+
+        clearBtn.addEventListener('click', () => {
+            if(pdfBytes) {
+                drawingActionsByPage[currentPageNum] = []; 
+                renderPage(currentPageNum); 
+            }
+        });
+
+        // === 6. ระบบรวมเอกสารบันทึกส่งออก (Save As PDF) ===
+        saveBtn.addEventListener('click', async () => {
+            if (!pdfBytes) return;
+
+            statusText.innerText = "กำลังประมวลผลฝังเส้นวาดลงไฟล์ฉบับเต็ม...";
+            const pdfDocModifier = await PDFLib.PDFDocument.load(pdfBytes);
+            const pages = pdfDocModifier.getPages();
+
+            Object.keys(drawingActionsByPage).forEach(pageIdxStr => {
+                const pageIndex = parseInt(pageIdxStr) - 1; 
+                const targetPage = pages[pageIndex];
+                if (!targetPage) return;
+
+                const { height } = targetPage.getSize();
+                const actions = drawingActionsByPage[pageIdxStr];
+                
+                let lastX = 0; lastY = 0;
+
+                actions.forEach(action => {
+                    const pdfY = height - action.y; 
+
+                    if (action.type === 'start') {
+                        lastX = action.x;
+                        lastY = pdfY;
+                    } else if (action.type === 'move') {
+                        targetPage.drawLine({
+                            start: { x: lastX, y: lastY },
+                            end: { x: action.x, y: pdfY },
+                            thickness: 3,
+                            color: PDFLib.rgb(0, 0, 0),
+                        });
+                        lastX = action.x; lastY = pdfY;
+                    }
+                });
+            });
+
+            const modifiedPdfBytes = await pdfDocModifier.save();
+            const blob = new Blob([modifiedPdfBytes], { type: "application/pdf" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            
+            link.download = "signed_" + currentFileName;
+            link.click();
+            statusText.innerText = "ดาวน์โหลดไฟล์ PDF ตัวซูมเขียนสำเร็จ!";
+        });
+    </script>
+</body>
+</html>
