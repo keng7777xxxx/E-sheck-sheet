@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDF Search & Writer (Multi-Page)</title>
+    <title>PDF Search & Writer (Multi-Page with Zoom)</title>
     
     <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
     
@@ -28,9 +28,14 @@
         button:active { background: #0056b3; }
         button:disabled { background: #ccc; cursor: not-allowed; }
         
-        .page-controls { display: flex; align-items: center; gap: 10px; background: #fff; padding: 5px 10px; border-radius: 5px; border: 1px solid #ccc; }
+        .page-controls, .zoom-controls { display: flex; align-items: center; gap: 5px; background: #fff; padding: 5px 10px; border-radius: 5px; border: 1px solid #ccc; }
+        .zoom-controls button { padding: 5px 10px; font-weight: bold; }
+        
         #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
-        #canvas-container { position: relative; border: 2px solid #333; background: white; max-width: 100%; display: inline-block; margin-top: 10px; }
+        
+        /* เพิ่มตู้คอนเทนเนอร์ให้มี Scrollbar เผื่อเวลาซูมใหญ่กว่าหน้าจอ */
+        #scroll-wrapper { width: 100%; overflow: auto; border: 2px solid #333; background: #525659; border-radius: 5px; margin-top: 10px; }
+        #canvas-container { position: relative; background: white; margin: 10px auto; display: block; }
         canvas { display: block; cursor: crosshair; }
     </style>
 </head>
@@ -43,9 +48,16 @@
         </div>
         
         <div class="page-controls">
-            <button id="prev-page-btn" disabled>◀ หน้าก่อนหน้า</button>
+            <button id="prev-page-btn" disabled>◀</button>
             <span id="page-num-display">หน้า: 0 / 0</span>
-            <button id="next-page-btn" disabled>หน้าถัดไป ▶</button>
+            <button id="next-page-btn" disabled>▶</button>
+        </div>
+
+        <div class="zoom-controls">
+            <button id="zoom-out-btn" disabled>🔍- ย่อ</button>
+            <span id="zoom-percent">100%</span>
+            <button id="zoom-in-btn" disabled>🔍+ ขยาย</button>
+            <button id="zoom-reset-btn" style="background:#6c757d;" disabled>พอดีหน้าจอ</button>
         </div>
 
         <button id="save-btn" disabled>Save As PDF</button>
@@ -54,16 +66,18 @@
         <div id="status">กรุณาพิมพ์ค้นหาไฟล์ PDF ที่ต้องการ</div>
     </div>
 
-    <div id="canvas-container">
-        <canvas id="pdf-canvas"></canvas>
+    <div id="scroll-wrapper">
+        <div id="canvas-container">
+            <canvas id="pdf-canvas"></canvas>
+        </div>
     </div>
 
     <script>
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
         const pdfFiles = [
-            { name: "62511 2LS0H.pdf", label: "62511 2LS0H" },
-            { name: "65140 2LS0A.pdf", label: "65140 2LS0A" }
+            { name: "62511 2LS0H.pdf", label: "62511 2LS0H (62511 2LS0H)" },
+            { name: "65140 2LS0A.pdf", label: "65140 2LS0A (5140 2LS0A)" }
         ];
 
         const searchInput = document.getElementById('search-input');
@@ -72,12 +86,18 @@
         const saveBtn = document.getElementById('save-btn');
         const clearBtn = document.getElementById('clear-btn');
         const canvas = document.getElementById('pdf-canvas');
+        const canvasContainer = document.getElementById('canvas-container');
         const ctx = canvas.getContext('2d');
         
-        // ตัวควบคุมหน้า
         const prevPageBtn = document.getElementById('prev-page-btn');
         const nextPageBtn = document.getElementById('next-page-btn');
         const pageNumDisplay = document.getElementById('page-num-display');
+        
+        // ประกาศตัวแปรระบบซูม
+        const zoomInBtn = document.getElementById('zoom-in-btn');
+        const zoomOutBtn = document.getElementById('zoom-out-btn');
+        const zoomResetBtn = document.getElementById('zoom-reset-btn');
+        const zoomPercentText = document.getElementById('zoom-percent');
         
         let pdfBytes = null;
         let pdfDocLib = null; 
@@ -87,22 +107,20 @@
         let currentPageNum = 1;
         let totalPagesCount = 0;
         
-        // ตัวเก็บประวัติการวาดแยกตามหน้า เช่น { 1: [...], 2: [...] }
+        // ตัวแปรเก็บขนาดเริ่มต้นเพื่อคำนวณอัตราซูม
+        let baseScale = 1.0; 
+        let currentZoomLevel = 1.0; // 1.0 = 100%, 1.5 = 150%
+        
         let drawingActionsByPage = {}; 
 
         // === 1. ระบบค้นหาไฟล์ ===
         searchInput.addEventListener('input', (e) => {
             const keyword = e.target.value.toLowerCase();
             searchResults.innerHTML = '';
-            
-            if (!keyword) {
-                searchResults.style.display = 'none';
-                return;
-            }
+            if (!keyword) { searchResults.style.display = 'none'; return; }
 
             const matchedFiles = pdfFiles.filter(file => 
-                file.name.toLowerCase().includes(keyword) || 
-                file.label.toLowerCase().includes(keyword)
+                file.name.toLowerCase().includes(keyword) || file.label.toLowerCase().includes(keyword)
             );
 
             if (matchedFiles.length > 0) {
@@ -120,42 +138,43 @@
                 searchResults.style.display = 'block';
             } else {
                 const div = document.createElement('div');
-                div.className = 'search-item';
-                div.style.color = '#999';
-                div.innerText = '❌ ไม่พบไฟล์ที่ตรงกัน';
-                searchResults.appendChild(div);
-                searchResults.style.display = 'block';
+                div.className = 'search-item'; div.style.color = '#999'; div.innerText = '❌ ไม่พบไฟล์ที่ตรงกัน';
+                searchResults.appendChild(div); searchResults.style.display = 'block';
             }
         });
 
         document.addEventListener('click', (e) => {
-            if (!e.target.closest('.search-container')) {
-                searchResults.style.display = 'none';
-            }
+            if (!e.target.closest('.search-container')) { searchResults.style.display = 'none'; }
         });
 
-        // === 2. ฟังก์ชันดึงไฟล์ PDF ต้นฉบับมาอ่านค่า ===
+        // === 2. ฟังก์ชันโหลดไฟล์ PDF ===
         async function loadPdfFile(fileName) {
             statusText.innerText = "กำลังดึงไฟล์จากเซิร์ฟเวอร์...";
             currentFileName = fileName;
-            drawingActionsByPage = {}; // รีเซ็ตประวัติการวาดใหม่ทั้งหมด
+            drawingActionsByPage = {}; 
             currentPageNum = 1;
+            currentZoomLevel = 1.0; // รีเซ็ตระดับซูมกลับไปเริ่มต้นทุกครั้งที่โหลดไฟล์ใหม่
 
             try {
                 const response = await fetch(fileName);
                 if (!response.ok) throw new Error('ไม่พบไฟล์บนเซิร์ฟเวอร์ กรุณาตรวจสอบชื่อไฟล์ PDF');
-                
                 pdfBytes = await response.arrayBuffer();
                 
-                // นับจำนวนหน้าทั้งหมดโดยใช้ PDFJS
                 const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes.slice(0)) });
                 pdfDocLib = await loadingTask.promise;
                 totalPagesCount = pdfDocLib.numPages;
 
-                // เรนเดอร์หน้าแรกขึ้นจอ
+                // คำนวณหาค่าสเกลเริ่มต้นให้พอดีกับความกว้างหน้าจอของอุปกรณ์นั้นๆ
+                const page = await pdfDocLib.getPage(currentPageNum);
+                const viewport = page.getViewport({ scale: 1.0 });
+                baseScale = Math.min((window.innerWidth - 40) / viewport.width, 1.5);
+
                 await renderPage(currentPageNum);
                 
                 saveBtn.disabled = false;
+                zoomInBtn.disabled = false;
+                zoomOutBtn.disabled = false;
+                zoomResetBtn.disabled = false;
             } catch (error) {
                 statusText.innerText = "เกิดข้อผิดพลาด: " + error.message;
                 saveBtn.disabled = true;
@@ -163,21 +182,26 @@
             }
         }
 
-        // === 3. ฟังก์ชันเรนเดอร์เนื้อหาแต่ละหน้าลงจอจริง ===
+        // === 3. ฟังก์ชันเรนเดอร์เนื้อหาพร้อมคำนวณอัตราซูม ===
         async function renderPage(pageNumber) {
             if (!pdfDocLib) return;
-            statusText.innerText = `กำลังโหลดหน้าอนุมัติที่ ${pageNumber}...`;
+            statusText.innerText = `กำลังเรนเดอร์หน้าอนุมัติที่ ${pageNumber}... (ซูม: ${Math.round(currentZoomLevel * 100)}%)`;
 
             try {
                 const page = await pdfDocLib.getPage(pageNumber);
-                const viewport = page.getViewport({ scale: 1.0 });
                 
-                const displayScale = Math.min((window.innerWidth - 30) / viewport.width, 1.5);
-                const scaledViewport = page.getViewport({ scale: displayScale });
+                // สเกลจริง = สเกลฐานฐานของหน้าจอ x ตัวคูณระดับซูมปัจจุบัน
+                const finalScale = baseScale * currentZoomLevel;
+                const scaledViewport = page.getViewport({ scale: finalScale });
 
+                // ปรับขนาดของบอร์ด Canvas และกรอบ Container ให้ใหญ่ยืดตามขยายตัวซูม
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
-                canvas.dataset.scale = displayScale;
+                canvasContainer.style.width = scaledViewport.width + 'png';
+                canvasContainer.style.height = scaledViewport.height + 'png';
+                
+                // เก็บค่าสเกลไฟนอลไว้คำนวณพิกัดปากกา
+                canvas.dataset.finalScale = finalScale; 
 
                 const renderContext = {
                     canvasContext: ctx,
@@ -185,30 +209,31 @@
                 };
                 await page.render(renderContext).promise;
 
-                // หากหน้านี้เคยมีเส้นวาดไว้ก่อน ให้วาดกลับขึ้นมาแสดงผลด้วย
+                // วาดเส้นที่บันทึกไว้กลับขึ้นมา (คำนวณสเกลขยายตามอัตโนมัติ)
                 if (drawingActionsByPage[pageNumber]) {
                     redrawCurrentPageLines();
                 }
 
-                statusText.innerText = `โหลดหน้า ${pageNumber} สำเร็จ! สามารถเขียนลงหน้าจอได้`;
+                zoomPercentText.innerText = `${Math.round(currentZoomLevel * 100)}%`;
+                statusText.innerText = `หน้า ${pageNumber} โหลดสำเร็จ! ซูมเขียนและเลื่อนหน้าจอได้`;
                 updatePageControls();
             } catch (error) {
-                statusText.innerText = "เกิดข้อผิดพลาดในการแสดงผลหน้า: " + error.message;
+                statusText.innerText = "เกิดข้อผิดพลาดในการซูม/เรนเดอร์หน้า: " + error.message;
             }
         }
 
-        // ฟังก์ชันวาดเส้นซ้ำสำหรับหน้าที่บันทึกไว้ชั่วคราว
         function redrawCurrentPageLines() {
             const actions = drawingActionsByPage[currentPageNum] || [];
-            const displayScale = parseFloat(canvas.dataset.scale);
+            const finalScale = parseFloat(canvas.dataset.finalScale);
 
             ctx.lineWidth = 3;
             ctx.strokeStyle = '#000000';
             ctx.lineCap = 'round';
 
             actions.forEach(action => {
-                const screenX = action.x * displayScale;
-                const screenY = action.y * displayScale;
+                // เอาระยะพิกัดจริงของ PDF คูณกับ สเกลซูมไฟนอล ณ เวลานั้น เพื่อให้เส้นขยายตามภาพหลังซูม
+                const screenX = action.x * finalScale;
+                const screenY = action.y * finalScale;
 
                 if (action.type === 'start') {
                     ctx.beginPath();
@@ -220,29 +245,41 @@
             });
         }
 
-        // อัปเดตสถานะของปุ่มกดเปลี่ยนหน้า
         function updatePageControls() {
             pageNumDisplay.innerText = `หน้า: ${currentPageNum} / ${totalPagesCount}`;
             prevPageBtn.disabled = (currentPageNum <= 1);
             nextPageBtn.disabled = (currentPageNum >= totalPagesCount);
         }
 
-        // เหตุการณ์กดปุ่มเปลี่ยนหน้า
-        prevPageBtn.addEventListener('click', () => {
-            if (currentPageNum > 1) {
-                currentPageNum--;
+        // === 4. ระบบกดปุ่มควบคุมการ Zoom ===
+        zoomInBtn.addEventListener('click', () => {
+            if (currentZoomLevel < 3.0) { // ล็อกให้ซูมเข้าสูงสุดได้ 300%
+                currentZoomLevel += 0.25; // เพิ่มทีละ 25%
                 renderPage(currentPageNum);
             }
+        });
+
+        zoomOutBtn.addEventListener('click', () => {
+            if (currentZoomLevel > 0.5) { // ล็อกให้ย่อขนาดต่ำสุดได้ 50%
+                currentZoomLevel -= 0.25; // ลดทีละ 25%
+                renderPage(currentPageNum);
+            }
+        });
+
+        zoomResetBtn.addEventListener('click', () => {
+            currentZoomLevel = 1.0; // รีเซ็ตสเกลกลับมาค่ามาตรฐานพอดีหน้าจอ
+            renderPage(currentPageNum);
+        });
+
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageNum > 1) { currentPageNum--; renderPage(currentPageNum); }
         });
 
         nextPageBtn.addEventListener('click', () => {
-            if (currentPageNum < totalPagesCount) {
-                currentPageNum++;
-                renderPage(currentPageNum);
-            }
+            if (currentPageNum < totalPagesCount) { currentPageNum++; renderPage(currentPageNum); }
         });
 
-        // === 4. ระบบรับค่าตรวจจับการวาดเส้นแยกหน้า ===
+        // === 5. ระบบตรวจจับปากกา (วาดเส้นสัมพันธ์แม่นยำกับสเกลซูม) ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -261,13 +298,14 @@
             ctx.strokeStyle = '#000000';
             ctx.lineCap = 'round';
             
-            const displayScale = parseFloat(canvas.dataset.scale);
+            const finalScale = parseFloat(canvas.dataset.finalScale);
             if (!drawingActionsByPage[currentPageNum]) drawingActionsByPage[currentPageNum] = [];
             
+            // หารสเกลออกเพื่อแปลงค่าพิกัดพิกเซลบนหน้าจอให้กลายเป็นพิกัดสากลของไฟล์ PDF จริง (ป้องกันเส้นเบี้ยวเวลากดซูมเข้าออก)
             drawingActionsByPage[currentPageNum].push({ 
                 type: 'start', 
-                x: pos.x / displayScale, 
-                y: pos.y / displayScale 
+                x: pos.x / finalScale, 
+                y: pos.y / finalScale 
             });
         }
 
@@ -278,11 +316,11 @@
             ctx.lineTo(pos.x, pos.y);
             ctx.stroke();
 
-            const displayScale = parseFloat(canvas.dataset.scale);
+            const finalScale = parseFloat(canvas.dataset.finalScale);
             drawingActionsByPage[currentPageNum].push({ 
                 type: 'move', 
-                x: pos.x / displayScale, 
-                y: pos.y / displayScale 
+                x: pos.x / finalScale, 
+                y: pos.y / finalScale 
             });
         }
 
@@ -299,32 +337,28 @@
 
         clearBtn.addEventListener('click', () => {
             if(pdfBytes) {
-                drawingActionsByPage[currentPageNum] = []; // ลบข้อมูลการวาดเฉพาะหน้านี้
-                renderPage(currentPageNum); // สั่งเรนเดอร์ภาพพื้นหลังใหม่ทับ
+                drawingActionsByPage[currentPageNum] = []; 
+                renderPage(currentPageNum); 
             }
         });
 
-        // === 5. ระบบบันทึกไฟล์ (Save As PDF รวมทุกหน้า) ===
+        // === 6. ระบบรวมเอกสารบันทึกส่งออก (Save As PDF) ===
         saveBtn.addEventListener('click', async () => {
             if (!pdfBytes) return;
 
-            statusText.innerText = "กำลังฝังลายเส้นลงเอกสารทุกหน้า...";
-            
-            // นำไฟล์ PDF ต้นฉบับมาประมวลผลเซฟผ่าน PDFLib
+            statusText.innerText = "กำลังประมวลผลฝังเส้นวาดลงไฟล์ฉบับเต็ม...";
             const pdfDocModifier = await PDFLib.PDFDocument.load(pdfBytes);
             const pages = pdfDocModifier.getPages();
 
-            // ลูปเขียนข้อมูลเส้นลงไปในแต่ละหน้าที่มีการวาดจริง
             Object.keys(drawingActionsByPage).forEach(pageIdxStr => {
-                const pageIndex = parseInt(pageIdxStr) - 1; // อาร์เรย์ของ PDF หน้าเริ่มที่ 0
+                const pageIndex = parseInt(pageIdxStr) - 1; 
                 const targetPage = pages[pageIndex];
                 if (!targetPage) return;
 
                 const { height } = targetPage.getSize();
                 const actions = drawingActionsByPage[pageIdxStr];
                 
-                let lastX = 0;
-                let lastY = 0;
+                let lastX = 0; lastY = 0;
 
                 actions.forEach(action => {
                     const pdfY = height - action.y; 
@@ -339,8 +373,7 @@
                             thickness: 3,
                             color: PDFLib.rgb(0, 0, 0),
                         });
-                        lastX = action.x;
-                        lastY = pdfY;
+                        lastX = action.x; lastY = pdfY;
                     }
                 });
             });
@@ -352,7 +385,7 @@
             
             link.download = "signed_" + currentFileName;
             link.click();
-            statusText.innerText = "บันทึกและดาวน์โหลดไฟล์ใหม่สำเร็จ!";
+            statusText.innerText = "ดาวน์โหลดไฟล์ PDF ตัวซูมเขียนสำเร็จ!";
         });
     </script>
 </body>
