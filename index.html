@@ -95,7 +95,7 @@
         const clearBtn = document.getElementById('clear-btn');
         const undoBtn = document.getElementById('undo-btn'); 
         const canvas = document.getElementById('pdf-canvas');
-        const canvasContainer = document.getElementById('canvas-container');
+        const canvasContainer = document.getElementById('canvas-container'); // ตัวแปรคุมกล่องรอบนอก (C ตัวใหญ่)
         const ctx = canvas.getContext('2d');
         
         const prevPageBtn = document.getElementById('prev-page-btn');
@@ -204,7 +204,7 @@
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
                 
-                // แก้ไขตรงนี้: ปรับเปลี่ยนหน่วยจาก 'png' เป็น 'px' ให้ถูกต้องตามหลักการทำงานของ CSS
+                // แก้ไขจุดนี้: ปรับแก้ชื่อตัวแปรให้ตรงกับประกาศด้านบน (canvasContainer มี C พิมพ์ใหญ่) และใช้หน่วย px ให้ถูกต้อง
                 canvasContainer.style.width = scaledViewport.width + 'px';
                 canvasContainer.style.height = scaledViewport.height + 'px';
                 
@@ -297,7 +297,7 @@
             renderPage(currentPageNum);
         });
 
-        // === 5. ระบบตรวจจับปากกา (ปลดล็อคระบบสไลด์หน้าจอเวลาแตะ 2 นิ้ว) ===
+        // === 5. ระบบตรวจจับปากกา (ซ่อมส่วนเงื่อนไขปล่อยฟรีเมื่อใช้ 2 นิ้วปัดเลื่อนจอ) ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -308,13 +308,13 @@
         function startDrawing(e) {
             if (!pdfBytes) return;
             
-            // ถ้าใช้มากกว่า 1 นิ้วสัมผัสจอ (ตั้งใจจะใช้นิ้วปัดเลื่อนจอขยับมุมซูม) ให้ยกเลิกการลากเส้นวาดทันที และไม่ทำ preventDefault
+            // เช็คจำนวนนิ้ว: ถ้าใช้มากกว่า 1 นิ้ว (2 นิ้วถ่างขยายหรือเลื่อนจอ) ให้สลัดบอร์ดปากกาทิ้ง เพื่อให้หน้าจอเลื่อนได้อิสระ
             if (e.touches && e.touches.length > 1) {
                 isDrawing = false;
                 return; 
             }
             
-            // ถ้าใช้ 1 นิ้วเซ็นชื่อตามปกติ ให้ล็อกหน้าจอเพื่อความแม่นยำในการลากเส้นปากกา
+            // ล็อกหน้าจอเฉพาะเมื่อลากเส้นวาดปากกา 1 นิ้วเท่านั้น
             if (e.type === 'touchstart') e.preventDefault();
             
             isDrawing = true;
@@ -339,7 +339,7 @@
         function draw(e) {
             if (!isDrawing) return;
             
-            // ระหว่างที่ลากเส้นอยู่ หากมีนิ้วที่สองแตะเข้ามาเพิ่มกลางคัน ให้ตัดจบการวาดทันทีเพื่อส่งต่อให้บราวเซอร์ทำหน้าที่สไลด์เลื่อนกระดาษ
+            // ถ้าตรวจเจอนิ้วที่ 2 แตะลงมากลางคันขณะเขียน ให้ตัดเส้นวาดทิ้ง เพื่อส่งไม้ต่อให้เบราว์เซอร์เปิดโหมดสไลด์หน้าจอทันที
             if (e.touches && e.touches.length > 1) {
                 isDrawing = false;
                 return;
