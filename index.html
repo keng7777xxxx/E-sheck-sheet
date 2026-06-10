@@ -32,7 +32,6 @@
         
         #status { font-size: 14px; color: #555; font-weight: bold; width: 100%; margin-top: 5px; }
         
-        /* ปรับสไตล์ตรงนี้: ช่วยให้สไลด์บนแท็บเล็ตและมือถือลื่นไหลไม่ติดขัด */
         #scroll-wrapper { 
             width: 100%; 
             max-height: 65vh; 
@@ -41,7 +40,7 @@
             background: #525659; 
             border-radius: 5px; 
             margin-top: 10px;
-            -webkit-overflow-scrolling: touch; /* เปิดระบบหน่วงลื่นไหลของ iOS/iPadOS */
+            -webkit-overflow-scrolling: touch; 
         }
         #canvas-container { position: relative; background: white; margin: 10px auto; display: block; }
         canvas { display: block; cursor: crosshair; }
@@ -205,6 +204,7 @@
                 canvas.width = scaledViewport.width;
                 canvas.height = scaledViewport.height;
                 
+                // แก้ไขตรงนี้: ปรับเปลี่ยนหน่วยจาก 'png' เป็น 'px' ให้ถูกต้องตามหลักการทำงานของ CSS
                 canvasContainer.style.width = scaledViewport.width + 'px';
                 canvasContainer.style.height = scaledViewport.height + 'px';
                 
@@ -297,7 +297,7 @@
             renderPage(currentPageNum);
         });
 
-        // === 5. ระบบตรวจจับปากกา (แก้ไขเพื่อปลดล็อคระบบเลื่อนหน้าจอ) ===
+        // === 5. ระบบตรวจจับปากกา (ปลดล็อคระบบสไลด์หน้าจอเวลาแตะ 2 นิ้ว) ===
         function getPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -308,13 +308,13 @@
         function startDrawing(e) {
             if (!pdfBytes) return;
             
-            // แก้ไขจุดที่ 1: เช็คว่าถ้าใช้มากกว่า 1 นิ้วสัมผัสจอ ให้ยกเลิกการลากเส้นวาดทันที และไม่ทำ preventDefault เพื่อเปิดให้จอสไลด์ได้
+            // ถ้าใช้มากกว่า 1 นิ้วสัมผัสจอ (ตั้งใจจะใช้นิ้วปัดเลื่อนจอขยับมุมซูม) ให้ยกเลิกการลากเส้นวาดทันที และไม่ทำ preventDefault
             if (e.touches && e.touches.length > 1) {
                 isDrawing = false;
                 return; 
             }
             
-            // ถ้าใช้ 1 นิ้วเซ็นชื่อตามปกติ ให้ทำคำสั่งบล็อกจอเลื่อนเพื่อความแม่นยำในการเขียน
+            // ถ้าใช้ 1 นิ้วเซ็นชื่อตามปกติ ให้ล็อกหน้าจอเพื่อความแม่นยำในการลากเส้นปากกา
             if (e.type === 'touchstart') e.preventDefault();
             
             isDrawing = true;
@@ -339,7 +339,7 @@
         function draw(e) {
             if (!isDrawing) return;
             
-            // แก้ไขจุดที่ 2: ถ้าตรวจจับได้ว่ามีนิ้วที่สองแตะเข้ามาเพิ่มกลางคันระหว่างลากปากกา ให้หยุดวาดทันทีเพื่อปล่อยให้สไลด์จอ
+            // ระหว่างที่ลากเส้นอยู่ หากมีนิ้วที่สองแตะเข้ามาเพิ่มกลางคัน ให้ตัดจบการวาดทันทีเพื่อส่งต่อให้บราวเซอร์ทำหน้าที่สไลด์เลื่อนกระดาษ
             if (e.touches && e.touches.length > 1) {
                 isDrawing = false;
                 return;
