@@ -90,23 +90,4 @@
         const ctx = canvas.getContext('2d');
         
         const prevPageBtn = document.getElementById('prev-page-btn');
-        const nextPageBtn = document.getElementById('next-page-btn');
-        const pageNumDisplay = document.getElementById('page-num-display');
-        
-        const zoomInBtn = document.getElementById('zoom-in-btn');
-        const zoomOutBtn = document.getElementById('zoom-out-btn');
-        const zoomResetBtn = document.getElementById('zoom-reset-btn');
-        const zoomPercentText = document.getElementById('zoom-percent');
-        
-        let pdfBytes = null;
-        let pdfDocLib = null; 
-        let isDrawing = false;
-        let currentFileName = "document.pdf";
-        
-        let currentPageNum = 1;
-        let totalPagesCount = 0;
-        
-        let baseScale = 1.0; 
-        let currentZoomLevel = 1.0; 
-        
-        let drawingActionsByPage = {};
+        const nextPageBtn = document.
